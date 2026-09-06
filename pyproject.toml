@@ -1,0 +1,31 @@
+[project]
+name = "mailsome"
+version = "0.1.0"
+description = "A personal Gmail client to manage a busy inbox without missing what matters"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "starlette",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "httpx",
+    "pre-commit",
+    "pytest",
+    "pytest-bdd",
+    "ruff",
+    "ty",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+bdd_features_base_dir = "tests/features"
+addopts = "--tb=short --durations=10"
+
+[tool.ruff.lint]
+extend-select = ["I"]

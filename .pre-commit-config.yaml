@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=850"]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  # Use the tool versions in uv.lock for both local and hook runs.
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        entry: uv run --locked ruff check --fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: ty
+        name: ty check
+        entry: uv run --locked ty check
+        language: system
+        types_or: [python, pyi]
