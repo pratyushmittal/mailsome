@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mailsome</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+  <script defer src="/static/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="inboxApp" @keydown.window="handleShortcut($event)">
+  <div class="mail-app">
+    <header class="toolbar">
+      <nav class="tabs" aria-label="Mail labels">
+        <template x-for="tab in tabs" :key="tab.id">
+          <button class="tab label-tab" :id="'label-tab-' + tab.id" :data-tone="tab.id % 6"
+            :class="{'active': activeTab === tab.id && !searchQuery, 'dragging': draggingTab === tab.id, 'drop-target': dropTarget === tab.id && draggingTab !== tab.id}"
+            :aria-pressed="activeTab === tab.id && !searchQuery" :title="(tab.description || tab.query || tab.name) + ' · Drag to reorder, or Alt + ← / →'"
+            :draggable="!savingOrder && !savingTab" aria-describedby="reorder-help" aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+            @dragstart="startDrag($event, tab.id)" @dragend="draggingTab = null; dropTarget = null"
+            @dragover.prevent="if (draggingTab !== null) dropTarget = tab.id" @drop.prevent="dropTab(tab.id)"
+            @keydown.alt.left.prevent="moveTab(tab.id, tabs.findIndex(item => item.id === tab.id) - 1)"
+            @keydown.alt.right.prevent="moveTab(tab.id, tabs.findIndex(item => item.id === tab.id) + 1)"
+            @click="selectTab(tab.id)"><span class="tab-dot" aria-hidden="true"></span><span class="tab-name" x-text="tab.name"></span></button>
+        </template>
+        <button id="others-tab" class="tab others-tab" :class="{'active': activeTab === null && !searchQuery}" :aria-pressed="activeTab === null && !searchQuery" @click="selectTab(null)" title="Recent inbox mail outside your other tabs"><span aria-hidden="true">✳</span> Others</button>
+        <button class="add-tab" @click="editTab()" aria-label="Add label tab">+ Add</button>
+      </nav>
+      <div class="toolbar-actions">
+        <button class="quiet search-toggle" x-ref="searchToggle" @click="toggleSearch()" :aria-expanded="searchOpen" aria-controls="mail-search" aria-keyshortcuts="/" title="Search (/)" :class="{'search-active': searchOpen}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m13 13 4 4"></path></svg> Search</button>
+        <button class="quiet" x-show="account" x-cloak @click="refresh()" :disabled="syncing" x-text="syncing ? 'Refreshing…' : 'Refresh'"></button>
+        <details class="settings" @click.outside="$el.open = false" @toggle.self="if ($el.open) loadUsage()">
+          <summary>Settings</summary>
+          <div class="settings-panel">
+            <strong>Mailsome</strong>
+            <p x-text="account?.email || 'No Gmail account connected'"></p>
+            <a href="/auth/connect" x-text="account ? 'Reconnect Gmail' : 'Connect Gmail'"></a>
+            <p>Opening messages does not mark them read. Label rules run when Mailsome syncs.</p>
+            <p x-show="account && !ai.can_label">Reconnect Gmail to grant label access. Gmail's modify permission is broader than labels; Mailsome does not send or delete mail.</p>
+            <section class="ai-usage" aria-label="AI usage">
+              <div class="usage-heading"><strong>AI usage</strong><button class="quiet" @click="loadUsage()" :disabled="usageLoading" aria-label="Refresh AI usage">↻ Refresh</button></div>
+              <p x-show="!aiUsage && usageLoading" role="status">Loading usage…</p>
+              <p class="error" x-show="usageError" x-text="usageError" role="alert"></p>
+              <template x-if="aiUsage">
+                <div>
+                  <div class="usage-total"><strong x-text="costLabel(aiUsage.summary.total_usd)"></strong><span>Estimated USD · recorded requests</span></div>
+                  <p><span x-text="aiUsage.summary.request_count.toLocaleString()"></span> requests · Tracking since <span x-text="new Date(aiUsage.summary.tracking_started_at).toLocaleString()"></span>. Earlier costs aren't available.</p>
+                  <p class="usage-warning" x-show="aiUsage.summary.unknown_cost_count || aiUsage.summary.running_count"><span x-text="aiUsage.summary.unknown_cost_count"></span> unknown-cost requests; <span x-text="aiUsage.summary.running_count"></span> running. Their unreported costs are not included.</p>
+                  <details class="usage-history">
+                    <summary>Request history</summary>
+                    <p>API attempts, not Gmail writes. Estimated from token usage and saved rates, not your OpenAI invoice. No email content is logged.</p>
+                    <p x-show="!aiUsage.requests.length">No requests recorded yet.</p>
+                    <div class="usage-requests">
+                      <template x-for="entry in aiUsage.requests" :key="entry.id">
+                        <article class="usage-entry">
+                          <div class="usage-heading"><time x-text="new Date(entry.started_at).toLocaleString()"></time><strong x-text="costLabel(entry.cost_usd)"></strong></div>
+                          <p><span x-text="entry.model"></span> · <span x-text="entry.reasoning"></span> · <span x-text="entry.message_count"></span> messages</p>
+                          <p><span class="usage-status" :data-status="entry.status" x-text="entry.status"></span><span x-show="entry.finished_at" x-text="entry.finished_at ? ' · ' + Math.max(0, (entry.finished_at - entry.started_at) / 1000).toFixed(1) + 's' : ''"></span><span x-show="entry.error_kind" x-text="entry.error_kind ? ' · ' + entry.error_kind.replaceAll('_', ' ') : ''"></span></p>
+                          <p x-show="entry.input_tokens !== null"><span x-text="entry.input_tokens?.toLocaleString()"></span> input (<span x-text="entry.cached_tokens?.toLocaleString() ?? '—'"></span> cached, <span x-text="entry.cache_write_tokens?.toLocaleString() ?? '—'"></span> cache writes) · <span x-text="entry.output_tokens?.toLocaleString() ?? '—'"></span> output (<span x-text="entry.reasoning_tokens?.toLocaleString() ?? '—'"></span> reasoning, included)</p>
+                          <small x-show="entry.response_id" x-text="entry.response_id"></small>
+                        </article>
+                      </template>
+                    </div>
+                    <button class="quiet" x-show="aiUsage.next_before !== null" :disabled="usageLoading" @click="loadUsage(aiUsage.next_before)">Load older requests</button>
+                  </details>
+                </div>
+              </template>
+            </section>
+            <form class="ai-settings" @submit.prevent="saveAI()">
+              <strong>Auto-classification</strong>
+              <p>When enabled, recent inbox text is fetched before opening and sent to OpenAI. No attachments or older sender history are sent. API usage is billed to your OpenAI account.</p>
+              <label><input type="checkbox" x-model="ai.enabled"> Enable OpenAI classification</label>
+              <label>OpenAI API key<input type="password" x-model="apiKey" autocomplete="new-password" :placeholder="ai.has_key ? 'Saved · leave blank to keep' : 'API key'"></label>
+              <p>Model: gpt-5.6-luna</p>
+              <label>Reasoning<select x-model="ai.reasoning"><option value="medium">Medium</option><option value="high">High</option></select></label>
+              <p class="error" x-show="aiError" x-text="aiError"></p>
+              <button :disabled="aiSaving" x-text="aiSaving ? 'Saving…' : 'Save AI settings'"></button>
+            </form>
+            <p>The inbox caches the last 14 days. Sender history loads separately, only when requested.</p>
+            <p x-show="account?.synced_at" x-text="'Last refreshed ' + new Date(account?.synced_at).toLocaleString()"></p>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <p id="reorder-help" class="sr-only">Drag label tabs to reorder, or focus a label and press Alt with the left or right arrow. Move buttons are also available in Edit label. Others stays last. Tab and Shift+Tab cycle mail tabs; 1–9 jump by displayed position. Press Escape to leave tab navigation.</p>
+    <span class="sr-only" aria-live="polite" x-text="orderMessage"></span>
+    <main :data-tone="searchQuery ? 0 : (activeTab === null ? 0 : activeTab % 6)">
+      <form id="mail-search" class="mail-search" x-show="searchOpen" x-cloak @submit.prevent="submitSearch()" role="search">
+        <input x-ref="searchInput" type="search" x-model="search" aria-label="Gmail search" placeholder="Search your whole recent inbox…" @search="if (!search) submitSearch()">
+        <button type="submit">Find mail</button>
+        <button type="button" class="quiet close-search" @click="closeSearch()" aria-label="Close search">×</button>
+      </form>
+      <template x-if="tabDraft">
+        <form class="filter-editor" @submit.prevent="saveTab()" aria-label="Label settings">
+          <div class="filter-fields">
+            <label for="tab-name">Label<input id="tab-name" x-model="tabDraft.name" list="gmail-labels" maxlength="225" required placeholder="Choose or create a label" :disabled="savingTab || !!tabDraft.label_id"></label>
+            <datalist id="gmail-labels"><template x-for="label in labels" :key="label.id"><option :value="label.name"></option></template></datalist>
+            <label for="tab-description">Description<textarea id="tab-description" x-model="tabDraft.description" maxlength="2000" rows="3" :required="tabDraft.auto_classify" placeholder="Which emails belong here?" :disabled="savingTab"></textarea></label>
+            <label for="tab-person">People</label>
+            <div class="people-input">
+              <template x-for="email in tabDraft.people" :key="email"><button type="button" class="person-chip" @click="tabDraft.people = tabDraft.people.filter(person => person !== email)" :disabled="savingTab" :aria-label="'Remove ' + email"><span x-text="email"></span> ×</button></template>
+              <input id="tab-person" type="text" inputmode="email" x-model="personDraft" @keydown.enter.prevent="addPerson()" placeholder="sender@example.com" :disabled="savingTab">
+              <button type="button" class="quiet" @click="addPerson()" :disabled="savingTab">Add sender</button>
+            </div>
+            <label class="checkbox"><input type="checkbox" x-model="tabDraft.auto_classify" :disabled="savingTab"> Auto-classify</label>
+          </div>
+          <p class="muted" x-show="tabDraft.auto_classify && !ai.enabled">Enable OpenAI classification in Settings to start. Your description guides the AI.</p>
+          <p class="muted" x-show="tabDraft.query">This saved search will become a label tab when you save.</p>
+          <p class="error" x-show="!ai.can_label"><a href="/auth/connect">Reconnect Gmail</a> to allow label creation and assignment.</p>
+          <p class="error" x-show="tabError" x-text="tabError" role="alert"></p>
+          <div class="tab-order-controls" x-show="tabDraft.id !== null">
+            <span>Tab position</span>
+            <button type="button" class="quiet" @click="moveTab(tabDraft.id, tabs.findIndex(tab => tab.id === tabDraft.id) - 1)" :disabled="savingOrder || savingTab || tabs[0]?.id === tabDraft.id">← Move left</button>
+            <button type="button" class="quiet" @click="moveTab(tabDraft.id, tabs.findIndex(tab => tab.id === tabDraft.id) + 1)" :disabled="savingOrder || savingTab || tabs[tabs.length - 1]?.id === tabDraft.id">Move right →</button>
+          </div>
+          <div class="form-actions">
+            <button type="submit" :disabled="savingTab || savingOrder || !ai.can_label" x-text="savingTab ? 'Saving…' : 'Save'"></button>
+            <button type="button" class="quiet" @click="tabDraft = null" :disabled="savingTab">Cancel</button>
+            <button type="button" class="quiet delete-tab" x-show="tabDraft.id !== null" @click="deleteTab()" :disabled="savingTab">Remove tab</button>
+          </div>
+        </form>
+      </template>
+
+      <section class="sync-progress" x-show="syncing" x-cloak aria-label="Sync progress">
+        <div class="sync-summary"><span x-text="progressLabel" aria-live="polite"></span><span x-text="elapsed + (progress?.updated_at ? ' · Updated ' + progressAge + 's ago' : '')"></span></div>
+        <progress :value="progress?.total > 0 ? progress.completed : null" :max="progress?.total || 1" aria-label="Current sync phase progress"></progress>
+        <p class="sync-warning" x-show="progressError || progressAge >= 15" x-text="progressError || 'No new progress for ' + progressAge + 's. A Gmail request may be slow or retrying.'" role="status"></p>
+      </section>
+      <p class="muted" x-show="labelProgress?.status === 'running'" x-cloak role="status" x-text="labelProgress?.stage === 'sender rules' ? 'Applying sender rules…' : 'Classified ' + labelProgress?.completed + ' / ' + labelProgress?.total + (labelProgress?.stage === 'preparing' ? ' · Prepared ' + labelProgress?.prepared : ' · Waiting for AI')"></p>
+      <p class="error" x-show="labelProgress?.status === 'failed'" x-cloak x-text="labelProgress?.error" role="alert"></p>
+      <p class="error" x-show="error" x-cloak x-text="error" role="alert"></p>
+
+      <div class="view-caption">
+        <button class="back quiet" x-show="selected" x-cloak @click="closeMessage()">← Back to mail</button>
+        <span x-show="!selected"><strong x-text="senderView ? senderView.email : searchQuery ? 'Search results' : (activeTab === null ? 'Others' : tabs.find(tab => tab.id === activeTab)?.name)"></strong><span class="caption-detail" x-text="senderView ? ' · All dates, including archived' : ' · Last 14 days'"></span></span>
+        <button class="quiet" x-show="activeTab !== null && !searchQuery && !senderView" x-cloak @click="editTab(tabs.find(tab => tab.id === activeTab))">Edit label</button>
+      </div>
+
+      <section class="inbox" x-show="!selected" aria-label="Inbox messages">
+        <div class="empty" x-show="loading">Loading mail…</div>
+        <div class="empty" x-show="!loading && !account" x-cloak>
+          <h2>Connect your Gmail</h2>
+          <p>Start with the last two weeks of inbox mail.</p>
+          <a href="/auth/connect">Connect Gmail →</a>
+        </div>
+        <div class="empty" x-show="!loading && account && !messages.length" x-cloak>
+          <p x-text="syncing ? 'Preparing your inbox. Progress is shown above.' : (senderView ? 'No emails from this sender.' : searchQuery ? 'No recent inbox mail matches this search.' : (activeTab === null ? 'All clear here. No mail outside your other tabs.' : 'Nothing here just yet.'))"></p>
+        </div>
+        <template x-for="mail in messages" :key="mail.id">
+          <button class="mail" :class="{'unread': mail.labels.includes('UNREAD')}" @click="openMessage(mail, !!senderView)">
+            <span class="mail-top"><span class="subject" x-text="mail.subject"></span><time x-text="new Date(mail.received_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})"></time></span>
+            <span class="sender" x-text="mail.sender || 'Unknown sender'"></span>
+          </button>
+        </template>
+        <button class="quiet" x-show="senderView?.next && !loading" @click="loadAllSender()">Load more emails</button>
+        <button class="quiet" x-show="senderView && error && !loading" @click="loadAllSender(!messages.length)">Retry sender search</button>
+      </section>
+
+      <article class="opened-mail" x-show="selected" x-cloak aria-label="Message reader">
+        <header class="message-heading">
+          <h1 x-text="selected?.subject"></h1>
+          <p><span x-text="selected?.sender"></span><span class="message-date" x-text="selected ? new Date(selected.received_at).toLocaleString() : ''"></span></p>
+          <span class="muted" x-show="selected?.remote">From sender history · Includes older and archived mail</span>
+        </header>
+        <div class="reader-grid">
+          <section class="reader" aria-label="Message body">
+            <pre x-text="bodyLoading ? 'Loading message…' : body"></pre>
+            <p class="reader-note">Text-only · Remote images and attachments are not loaded</p>
+          </section>
+          <aside class="sender-sidebar" aria-label="Sender context">
+            <div class="message-labels" aria-label="Message labels">
+              <template x-for="label in (selected?.labels || []).filter(id => !['INBOX', 'UNREAD'].includes(id))" :key="label"><span x-text="labels.find(item => item.id === label)?.name || tabs.find(item => item.label_id === label)?.name || label"></span></template>
+            </div>
+            <details class="label-reasons" x-show="reasons.length"><summary x-text="reasons.length + ' label decisions'"></summary><template x-for="(reason, index) in reasons" :key="index"><p><strong x-text="reason.name"></strong> · <span x-text="reason.reason"></span><small x-show="!reason.applied"> · Pending</small></p></template></details>
+            <p class="sender-address" x-text="selected?.sender_email || 'No sender address'" :title="selected?.sender_email"></p>
+            <p class="sender-note" x-show="senderContext?.note" x-text="senderContext?.note"></p>
+            <div class="sender-actions" x-ref="senderActions" tabindex="-1">
+              <button class="quiet" @click="archiveMessage()" :disabled="actionBusy || bodyLoading" aria-keyshortcuts="d"><kbd>d</kbd> Archive</button>
+              <button class="quiet" @click="viewSender()" :disabled="!selected?.sender_email"><kbd>grr</kbd> All emails</button>
+              <button class="quiet" @click="editSender('labels')" :disabled="actionBusy || bodyLoading || !senderContext?.preferencesLoaded" aria-keyshortcuts="m"><kbd>m</kbd> Auto-label sender</button>
+              <button class="quiet" @click="editSender('note')" :disabled="actionBusy || bodyLoading || !senderContext?.preferencesLoaded" aria-keyshortcuts="n"><kbd>n</kbd> <span x-text="senderContext?.note ? 'Edit note' : 'Add note'"></span></button>
+              <button class="quiet" x-show="selected?.unsubscribe" @click="editSender('unsubscribe')" :disabled="actionBusy || bodyLoading" aria-keyshortcuts="u"><kbd>u</kbd> Unsubscribe</button>
+              <form data-editor="labels" x-show="senderEditor === 'labels'" @submit.prevent="saveSender()">
+                <p>Always apply to this sender:</p>
+                <template x-for="tab in tabs.filter(tab => tab.label_id)" :key="tab.id"><label class="sender-label-choice"><input type="checkbox" x-model="senderLabels" :value="tab.label_id" :disabled="actionBusy"><span x-text="tab.name"></span></label></template>
+                <p class="muted" x-show="!tabs.some(tab => tab.label_id)">Add a label tab first.</p>
+                <p class="muted">Applies to recent and future inbox mail. Unchecking stops the rule; it does not remove existing labels or disable AI.</p>
+                <button type="submit" :disabled="actionBusy">Save rules</button> <button class="quiet" type="button" @click="senderEditor = null" :disabled="actionBusy">Cancel</button>
+              </form>
+              <form data-editor="note" x-show="senderEditor === 'note'" @submit.prevent="saveSender()">
+                <label>Sender note<textarea x-model="noteDraft" rows="4" maxlength="4000" :disabled="actionBusy"></textarea></label>
+                <button type="submit" :disabled="actionBusy">Save note</button> <button class="quiet" type="button" @click="senderEditor = null" :disabled="actionBusy">Cancel</button>
+              </form>
+              <div data-editor="unsubscribe" x-show="senderEditor === 'unsubscribe'">
+                <p>This link was supplied by the sender. Complete the unsubscribe on their website or in your mail client.</p>
+                <a :href="selected?.unsubscribe || null" target="_blank" rel="noopener noreferrer">Open unsubscribe option ↗</a>
+                <p>Once finished, label this sender “unsubscribed” for recent and future inbox mail. Opening the link alone does not confirm success.</p>
+                <button @click="markUnsubscribed()" :disabled="actionBusy">I've unsubscribed — label sender</button>
+                <button class="quiet" @click="senderEditor = null" :disabled="actionBusy">Cancel</button>
+              </div>
+            </div>
+            <p class="error" x-show="actionError" x-text="actionError" role="alert"></p>
+            <h2>Previous emails</h2>
+            <template x-for="conversation in previousConversations" :key="conversation.id">
+              <button class="conversation" @click="openMessage(conversation, true)">
+                <span x-text="conversation.subject"></span>
+                <time x-text="new Date(conversation.received_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'})"></time>
+              </button>
+            </template>
+            <p class="muted" x-show="senderContext?.loading || senderContext?.messages === null" role="status">Loading emails…</p>
+            <p class="muted" x-show="senderContext?.messages !== null && !senderContext?.loading && !senderContext?.error && !previousConversations.length">No other emails in this page.</p>
+            <p class="error" x-show="senderContext?.error" x-text="senderContext?.error" role="alert"></p>
+            <button class="quiet" x-show="senderContext?.error" :disabled="senderContext?.loading" @click="loadSenderHistory()">Retry</button>
+            <button class="quiet more-history" x-show="selected?.sender_email" @click="viewSender()">View all emails →</button>
+          </aside>
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

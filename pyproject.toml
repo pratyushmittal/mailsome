@@ -5,13 +5,21 @@ description = "A personal Gmail client to manage a busy inbox without missing wh
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "callable-ai>=0.1.8",
+    "google-api-python-client>=2.200.0",
+    "google-auth-httplib2>=0.4.2",
+    "google-auth-oauthlib>=1.4.1",
+    "html2text>=2025.4.15",
+    "itsdangerous>=2.2.0",
+    "pydantic>=2.13.5",
     "starlette",
     "uvicorn[standard]",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx",
+    "google-api-python-client-stubs>=1.40.0",
+    "httpx2>=2.12.0",
     "pre-commit",
     "pytest",
     "pytest-bdd",
@@ -24,6 +32,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 bdd_features_base_dir = "tests/features"
 addopts = "--tb=short --durations=10"
 
