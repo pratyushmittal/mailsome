@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Sender {{ field }} · Mailsome{% endblock %}
+{% block content %}
+<section class="filter-editor" data-editor>
+  <h1>Edit sender {{ field }}</h1><p>{{ sender }}</p>
+  {% if field == "labels" %}{% include "includes/sender_filters.html" %}{% endif %}
+  <form method="post">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ next_url }}">
+    {% include "includes/form_fields.html" %}
+    <div class="form-actions"><button type="submit">Save {{ field }}</button><a href="{{ next_url }}" data-cancel>Cancel</a></div>
+  </form>
+</section>
+{% endblock %}

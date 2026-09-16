@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{% if tab %}Edit{% else %}Add{% endif %} label · Mailsome{% endblock %}
+{% block content %}
+<section class="filter-editor" data-editor>
+  <h1>{% if tab %}Edit{% else %}Add{% endif %} label tab</h1>
+  {% if tab.query %}<p>This is a legacy Gmail query tab. Saving converts it to a Gmail label tab.</p>{% endif %}
+  {% include "includes/sender_filters.html" %}
+  <form method="post">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ next_url }}">
+    {% include "includes/form_fields.html" %}
+    <datalist id="gmail-labels">{% for label in gmail_labels %}<option value="{{ label.name }}"></option>{% endfor %}</datalist>
+    <div class="form-actions"><button type="submit">Save label</button><a href="{{ next_url }}" data-cancel>Cancel</a></div>
+  </form>
+  {% if tab %}
+  <div class="tab-move">
+    <form method="post" action="{% url 'tab_order' %}">
+      {% csrf_token %}<input type="hidden" name="tab" value="{{ tab.id }}"><input type="hidden" name="next" value="{{ return_url }}">
+      <button name="direction" value="left">Move left</button><button name="direction" value="right">Move right</button>
+    </form>
+  </div>
+  <form method="post" class="form-actions">
+    {% csrf_token %}<input type="hidden" name="next" value="/">
+    <button name="action" value="delete" type="submit" class="quiet">Remove tab (keep Gmail label)</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

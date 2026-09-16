@@ -1,0 +1,3 @@
+{% for other in history %}
+<a class="conversation" href="{{ other.url }}"><span>{{ other.subject|default:"(No subject)" }} {% include "includes/attachment_badge.html" with count=other.attachment_count %}</span><time datetime="{{ other.date|date:'c' }}">{{ other.date|date:"M j, Y" }}</time></a>
+{% empty %}<p class="sidebar-note">{{ history_error|default:"No other emails from this sender." }}</p>{% endfor %}

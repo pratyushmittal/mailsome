@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ message.subject }} · Mailsome{% endblock %}
+{% block content %}
+<div class="view-caption"><a href="{{ back_url }}" data-back>← Back to inbox</a></div>
+<section class="reader-grid" data-reader>
+  <article class="reader">
+    <header class="conversation-heading"><h1>{{ message.subject|default:"(No subject)" }}</h1><span>{{ conversation|length }} message{{ conversation|length|pluralize }}{% if later_count %} · <a href="{{ later_anchor }}">{{ later_count }} later repl{{ later_count|pluralize:"y,ies" }} ↓</a>{% endif %}</span></header>
+    {% if conversation_error %}<p class="error" role="status">{{ conversation_error }}</p>{% endif %}
+    <div class="thread-messages" aria-label="Conversation">
+    {% for other in conversation %}
+      {% if other.id == message.id %}
+      <section class="thread-selected" id="selected-message" aria-label="Selected message">
+    <header class="message-heading">
+      <p><span>From: {{ message.sender }}</span><time datetime="{{ message.date|date:'c' }}">{{ message.date|date:"M j, Y, H:i T" }}</time></p>
+      <dl class="message-recipients">
+        <dt>To</dt><dd>{{ message.recipients.To|join:", "|default:"Not provided in message headers" }}</dd>
+        {% for name, addresses in message.recipients.items %}
+          {% if name != "To" and addresses %}<dt>{{ name }}</dt><dd>{{ addresses|join:", " }}</dd>{% endif %}
+        {% endfor %}
+      </dl>
+    </header>
+    {% if has_html %}
+    <nav class="body-options" aria-label="Message format">
+      <a href="{{ formatted_url }}"{% if formatted %} aria-current="true"{% endif %}>Formatted</a>
+      <a href="{{ text_url }}"{% if not formatted %} aria-current="true"{% endif %}>Plain text</a>
+      {% if formatted %}{% if request.GET.images == '1' %}<a href="{{ formatted_url }}">Block external images</a>{% else %}<a href="{{ images_url }}">Load external images</a><span class="quiet">Images may reveal that you opened this email.</span>{% endif %}{% endif %}
+    </nav>
+    {% endif %}
+    {% if formatted %}
+      <div class="email-html" data-fragment="{{ body_url }}" aria-busy="true">
+        <p class="quiet">Loading formatted message… <a href="{{ body_url }}">Open formatted body</a></p>
+        <pre class="message-body">{{ message.body }}</pre>
+      </div>
+    {% else %}
+      <pre class="message-body">{{ message.body }}</pre>
+    {% endif %}
+    {% if message.rich_body != None and 'attachments' in message.rich_body %}
+      {% include "inbox/attachments.html" %}
+    {% else %}
+      <div data-fragment="{{ attachments_url }}"><a href="{{ attachments_url }}">Load attachment details</a></div>
+    {% endif %}
+      </section>
+      {% else %}
+      <a class="thread-summary" id="thread-{{ other.id }}" href="{{ other.url }}" aria-expanded="false">
+        <span><strong>{{ other.sender }}</strong> {% include "includes/attachment_badge.html" with count=other.attachment_count %}<span class="thread-subject">{{ other.subject }}</span></span>
+        <span>{% if 'SENT' in other.labels %}<small>Sent</small>{% elif 'INBOX' not in other.labels %}<small>Outside inbox</small>{% endif %}<time datetime="{{ other.date|date:'c' }}">{{ other.date|date:"M j, Y, H:i T" }}</time> ▸</span>
+      </a>
+      {% endif %}
+    {% endfor %}
+    </div>
+  </article>
+  <aside class="sender-sidebar">
+    <section class="message-labels" aria-label="Labels and decisions">
+      {% for label in label_names %}<span>{{ label }}</span>{% endfor %}
+      {% for decision in reasons %}<p class="label-reasons"><strong>{{ decision.name }}</strong> · {{ decision.source }}{% if not decision.applied %} · pending{% endif %}<br>{{ decision.reason }}</p>{% endfor %}
+    </section>
+    <section class="sender-address"><strong>{{ message.sender_email }}</strong>{% if sender_note %}<p class="sender-note">{{ sender_note }}</p>{% endif %}</section>
+    <nav class="sender-actions" aria-label="Message actions">
+      <a href="https://mail.google.com/mail/?authuser={{ account.email|urlencode:"" }}#all/{{ message.id|urlencode:"" }}" target="_blank" rel="noopener noreferrer" data-reply-gmail title="Opens Gmail in a new tab; choose Reply there."><kbd>r</kbd> Open in Gmail to reply ↗</a>
+      <form method="post" action="{% url 'archive' message.id %}" data-archive>
+        {% csrf_token %}<input type="hidden" name="next" value="{{ back_url }}"><button type="submit" class="quiet"><kbd>d</kbd> Archive conversation</button>
+      </form>
+      {% if message.sender_email %}
+      <a href="{{ sender_all_url }}" data-sender-all><kbd>grr</kbd> All mail from sender</a>
+      <a href="{{ sender_labels_url }}" data-sender-labels><kbd>m</kbd> Edit sender labels</a>
+      <a href="{{ sender_note_url }}" data-sender-note><kbd>n</kbd> {% if sender_note %}Edit{% else %}Add{% endif %} sender note</a>
+      {% endif %}
+      {% if message.unsubscribe %}<a href="{{ unsubscribe_url }}" data-unsubscribe><kbd>u</kbd> Unsubscribe</a>{% endif %}
+    </nav>
+    <section><h2>Previous emails</h2>
+      <div data-fragment="{{ history_url }}" aria-busy="true"><p class="sidebar-note">Loading… <a href="{{ history_url }}">Load previous emails</a></p></div>
+      {% if message.sender_email %}<a class="quiet more-history" href="{{ sender_all_url }}">View all →</a>{% endif %}
+    </section>
+  </aside>
+</section>
+{% endblock %}

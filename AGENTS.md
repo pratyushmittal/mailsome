@@ -1,56 +1,43 @@
-# Mailsome
+# Persistent project memory
 
-- Stack: Starlette, SQLite, Alpine.js, and Gmail APIs/client libraries.
-- Preserve Gmail's own search syntax; do not invent a separate search language.
-- Use `uv` with `pyproject.toml` and `uv.lock`; do not edit the lockfile by hand.
-- Use pytest-bdd for user-provided scenarios. Keep features in `tests/features/`
-  and bindings in `tests/test_*.py`.
-- One Gmail account with modify access for additive labeling and explicit archiving; no sending, deleting,
-  or marking mail read. Keep a rolling 14-day inbox cache. Bodies load on demand,
-  or early for explicitly enabled AI classification. Never recover by downloading
-  the whole mailbox.
-- Persist Gmail history cursors only with successfully applied changes. Expired
-  history rebuilds the same bounded cache. Serialize syncs per account.
-- Keep tokens server-side and email content inert. This phase is loopback-only,
-  on port 8002; it has no separate app login or public-hosting support.
-- UI follows the user's sketch: top tabs and Settings, a single-column mail list,
-  and an expanded reader with a narrow, differently colored sender-history sidebar.
-  Keep explanations out of the main view where possible; retain compact real progress.
-- Use the supplied AT Name Sans variable font, served locally, for UI typography.
-- Use compact colorful tabs with stable accents, a warm background, and horizontal
-  tab scrolling on narrow screens. Persist drag order; provide keyboard/move-button
-  alternatives. Reordering must not change AI policy or trigger reclassification.
-- Others stays rightmost and excludes messages belonging to any configured label or
-  legacy query tab. Unpinned Gmail labels do not exclude mail. Search opens on click,
-  searches the whole recent inbox, and closes/clears on Escape or tab selection.
-- Inbox shortcuts: Tab/Shift+Tab cycle displayed tabs (Others last), 1–9 jump by
-  displayed position, and / opens search. Preserve typing and native form/Settings
-  navigation; Escape lets keyboard users leave cycling tabs for toolbar controls.
-- Tabs pin Gmail label IDs. Store descriptions, exact sender rules, and the AI
-  checkbox locally. Create missing custom labels in Gmail; reject already pinned
-  labels. Removing a tab never deletes its Gmail label. Preserve legacy query tabs
-  until explicitly converted, and keep Gmail search separate.
-- Sender rules run on sync. AI uses callable-ai structured responses with only
-  enabled label names, short reasons, bounded batches, and gpt-5.6-luna at medium
-  reasoning by default. Require explicit OpenAI opt-in; keep its key server-side.
-- Classify outside the sync/cursor transaction. Persist validated decisions before
-  Gmail writes, reuse them on retry, and do not undo manual label removals. Email
-  text is untrusted data; no tools, attachments, or older history go to AI.
-- Sender history is fetched on demand in pages; older bodies must not expand the
-  rolling inbox cache.
-- Persist AI request metadata and estimated USD costs independently of the mail
-  cache. Keep per-request price snapshots; count cached tokens and reasoning only
-  once. Show tracking start and unknown costs explicitly; never invent past spend.
-- Usage logs must exclude keys, prompts, email content, message IDs, and raw errors.
-  Gmail-write retries do not create AI charges. Record attempts before requests,
-  disable hidden SDK retries, and mark unfinished requests interrupted on restart.
-- Reader sidebar order: compact labels/decisions, sender address and note, actions,
-  then at most five other individual emails (exclude only the current message).
-- Reader shortcuts: d archives only the opened message; grr opens paged all-date
-  sender results; m edits exact sender label rules; n adds/edits a durable local
-  sender note; u opens the advertised unsubscribe option. Preserve typing/editors.
-- Archive removes only INBOX, updates the cache after Gmail success, and never
-  advances the sync cursor. Sender-wide results/older bodies stay outside the cache.
-- Unsubscribe is an explicit external HTTPS/mailto handoff, not a server-side URL
-  fetch or automatic email. Only after owner confirmation, add/reuse the Gmail
-  unsubscribed label and pinned sender rule; opening a link is not proof of success.
+Keep durable user preferences, coding choices, and non-obvious constraints here
+so they survive compaction and future sessions. This is not a changelog, task
+tracker, or general project guide. Keep entries concise, replace obsolete choices,
+and leave feature descriptions and implementation walkthroughs in README or code.
+
+## Time zones
+
+- Use `Asia/Kolkata` (IST) as the default and frontend display time zone. Keep stored timestamps and internal calculations timezone-safe; localize only for display.
+
+## Utility modules
+
+- Keep app-specific helpers in each Django app's `utils.py`; put helpers shared across apps in `mailsome/utilities.py`.
+
+## Gmail and message boundaries
+
+- `inbox/gmail.py` owns Gmail API calls and client construction. Callers retain policy and transaction boundaries. Expose only externally used, operation-named functions; keep internal helpers private.
+- Preserve provider response types (including `Label` and `Profile`) instead of copying them into generic dictionaries. Use the provider's `Message`/`MessagePart` types at the Gmail boundary and `inbox.models.Message` in application code, not a third summary-dictionary representation.
+- Fetch full message/thread details without field masks and populate missing body caches when persisting them. Preserve existing bodies; use label-only reads for mutable state of known messages.
+- `message_from_gmail()` returns an unsaved model. Persist explicit metadata fields; never save that instance over downloaded bodies or AI completion.
+- Load mail only through browsing and history events; no recurring inbox listing, preload, fixed message window, or per-message label-trust state. Missing/expired history captures a fresh cursor without deleting mail or rebuilding the missed interval.
+- Persist labels from received message/thread details as well as history reads. Serialize fetch/save operations with the mailbox lock, releasing it between history messages. Callers must not nest this lock around helpers that acquire it.
+- Successful Gmail label writes acknowledge AI decisions but do not edit cached labels; request history sync to observe the writes.
+
+## Sender rules
+
+- `Tab.people` is authoritative. Manage Gmail filters only on sender/label edits or unpinning, matching the previous complete criteria and actions exactly. No filter ownership model or reconciliation during mail sync.
+- Apply sender labels to locally cached inbox mail, including after rule edits. Recompute missing labels without a backfill queue or sender pagination cursor.
+- Reapply manually removed sender labels on cached inbox mail, but preserve existing labels when a rule is removed.
+
+## AI classification
+
+- Classify unprocessed locally cached inbox mail without an age/count window. Trust cached labels; fetch only missing bodies during preparation. Exclude archived mail, spam, trash, and drafts. Bulk-add labels and acknowledge decisions only after successful writes.
+- Use short, deterministic batch-local message aliases, stable across correction attempts. Validate responses before mapping aliases back to real IDs for persistence.
+- Budget tokens during batch preparation only; do not repeat checks for requests or correction history.
+- Put optional user mail context in the system prompt, using the same settings snapshot for preparation and corrections. Context edits must preserve consent and completed classifications.
+- Explicit reclassification resets selected AI-enabled labels on selected cached inbox mail, preserving current `Tab.people` matches per message/label pair. Manual assignments/removals of those labels may be replaced; unrelated labels and mail stay untouched.
+- Keep a reset selection in the sync workflow until removals and label refresh succeed. Block AI meanwhile; only then clear selected decision history (including applied/legacy decisions) and reopen classification. Retry removals without another paid request.
+
+## Database
+
+- Use only `data/mailsome.sqlite3`; no import or backward-compatibility support for the previous app’s SQLite database is needed.

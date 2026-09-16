@@ -1,0 +1,5 @@
+{% if message.rich_body.attachments %}
+<nav class="attachments" aria-label="Attachments">
+  {% for file in message.rich_body.attachments %}<a href="{% url 'download_attachment' message.id file.id %}" download><strong>{{ file.name }}</strong> · {{ file.size|filesizeformat }}<br><small>{{ file.mime }} · Download</small></a>{% endfor %}
+</nav>
+{% endif %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Mail context · Mailsome{% endblock %}
+{% block content %}
+<section class="settings-page" data-editor>
+  <h1>Mail context</h1>
+  <p>Background for all AI labels, beyond individual label descriptions. Open from any page with <kbd>Alt+Shift+C</kbd>.</p>
+  <form method="post" class="form-panel">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    {% include "includes/form_fields.html" %}
+    <button type="submit">Save context</button>
+    <a class="quiet" href="{{ next_url }}" data-cancel>Cancel</a>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Unsubscribe · Mailsome{% endblock %}
+{% block content %}<section class="editor filter-editor" data-editor><h1>Unsubscribe</h1><p>{{ message.sender_email }}</p>
+{% if message.unsubscribe %}<p><a href="{{ message.unsubscribe }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open the sender’s advertised unsubscribe option</a></p><p>Complete the external process first. Mailsome does not send email or confirm that the sender has unsubscribed you.</p>{% endif %}
+<form method="post">{% csrf_token %}<input type="hidden" name="next" value="{{ next_url }}">
+{% include "includes/form_fields.html" %}
+{% if message.unsubscribe %}<button type="submit">Remember confirmed unsubscribe</button>{% endif %}<a href="{{ next_url }}" data-cancel>Cancel</a>
+</form></section>{% endblock %}

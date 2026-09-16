@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Something needs attention · Mailsome{% endblock %}
+{% block content %}
+<section class="form-panel" data-editor>
+  <h1>Something needs attention</h1>
+  <p class="error" role="alert">{{ error }}</p>
+  <a href="/" data-cancel>Back to inbox</a>
+  {% if status == 401 or status == 403 %}<a href="/auth/connect">Reconnect Gmail</a>{% endif %}
+</section>
+{% endblock %}

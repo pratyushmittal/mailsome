@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Action unavailable · Mailsome{% endblock %}
+{% block content %}<section class="editor filter-editor" data-editor><h1>Action unavailable</h1><p role="alert">{{ detail }}</p>
+<form method="post" action="{{ action_url }}">{% csrf_token %}<input type="hidden" name="next" value="{{ next_url }}"><button type="submit">Retry archive</button><a href="{{ next_url }}" data-cancel>Back to inbox</a></form>
+</section>{% endblock %}

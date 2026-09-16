@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Mailsome{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <div class="mail-app"{% if selected_tab %} data-tone="{{ selected_tab.tone }}"{% endif %}>
+    <header class="toolbar">
+      <nav class="tabs" aria-label="Mail labels">
+        {% for tab in tabs %}
+        <a class="tab{% if current_tab == tab.id|stringformat:'s' %} active{% endif %}" data-tab-id="{{ tab.id }}" data-tone="{{ tab.tone }}" href="{{ tab.url }}" draggable="true"><span class="tab-name">{{ tab.name }}</span></a>
+        {% endfor %}
+        <a class="tab others-tab{% if not current_tab %} active{% endif %}" href="/" id="others-tab">✳ Others</a>
+        <a class="add-tab" href="/tabs/new/?next={{ return_url|urlencode }}">+ Add</a>
+      </nav>
+      <div class="toolbar-actions">
+        <button type="button" class="quiet search-toggle" aria-controls="mail-search" aria-expanded="true">Search</button>
+        {% if account %}<form method="post" action="/refresh/" data-refresh>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><input type="hidden" name="retry_ai" value="on"><button class="quiet">Refresh</button></form>{% endif %}
+        <a class="quiet" href="{% url 'user_context' %}?next={{ return_url|urlencode }}" data-user-context aria-keyshortcuts="Alt+Shift+C" title="Edit mail context (Alt+Shift+C)">Mail context</a>
+        <a class="quiet" href="/settings/?next={{ return_url|urlencode }}">Settings</a>
+      </div>
+    </header>
+    <form id="mail-search" class="mail-search" method="get" action="/" role="search">
+      <label class="sr-only" for="search-query">Search Gmail</label>
+      <input id="search-query" type="search" name="q" value="{{ request.GET.q }}" placeholder="Search Gmail with Gmail syntax" autocomplete="off">
+      {% if current_tab %}<input type="hidden" name="tab" value="{{ current_tab }}">{% endif %}
+      <button type="submit">Search</button><a class="quiet" href="{% if current_tab %}/?tab={{ current_tab|urlencode }}{% else %}/{% endif %}" data-close-search>Close</a>
+    </form>
+    {% if account or sync_progress.status == 'queued' or sync_progress.status == 'running' or label_progress.status == 'queued' or label_progress.status == 'running' %}
+    <section class="sync-progress" data-progress data-revision="{{ progress_revision|default_if_none:'' }}" data-poll-idle="{{ poll_inbox|yesno:'true,false' }}" data-active="{% if sync_progress.status == 'queued' or sync_progress.status == 'running' or label_progress.status == 'queued' or label_progress.status == 'running' %}true{% else %}false{% endif %}" role="status">
+      <p data-sync-status{% if sync_progress.status != 'queued' and sync_progress.status != 'running' %} hidden{% endif %}>Sync: {{ sync_progress.status }} · {{ sync_progress.stage }} {{ sync_progress.completed|default:0 }}{% if sync_progress.total != None %} / {{ sync_progress.total }}{% endif %}</p>
+      <p data-label-status{% if label_progress.status != 'queued' and label_progress.status != 'running' %} hidden{% endif %}>Labeling: {{ label_progress.status }} · {{ label_progress.completed|default:0 }}{% if label_progress.total != None %} / {{ label_progress.total }}{% endif %}</p>
+      <p data-progress-error class="error" hidden></p>
+      <span data-mail-updated hidden>Mail updated.</span>
+      <a class="quiet" href="{{ return_url }}">Reload status and mail</a>
+    </section>
+    {% endif %}
+    {% if sync_progress.status == 'failed' %}<p class="error" role="alert">{{ sync_progress.error }}</p>{% endif %}
+    {% if label_progress.status == 'failed' %}<p class="error" role="alert">{{ label_progress.error }}</p>{% endif %}
+    <main>{% block content %}{% endblock %}</main>
+    <form method="post" action="/tabs/order/" id="tab-order-form" hidden>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"></form>
+  </div>
+</body>
+</html>

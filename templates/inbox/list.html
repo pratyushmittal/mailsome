@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{% if sender %}{{ sender }}{% else %}Inbox{% endif %} · Mailsome{% endblock %}
+{% block content %}
+{% if not account %}
+<section class="empty"><h1>Connect your Gmail inbox</h1><a href="/auth/connect">Connect Gmail</a></section>
+{% else %}
+<div class="view-caption">
+  <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% elif selected_tab %}{{ selected_tab.name }}{% else %}Others{% endif %}</strong> · {{ messages|length }} emails</span>
+  {% if sender %}<a href="/">Back to inbox</a>{% elif selected_tab %}<a href="{% url 'tab_edit' selected_tab.id %}?next={{ return_url|urlencode }}">Edit label</a>{% endif %}
+</div>
+<div class="mail-list inbox">
+  {% for message in messages %}
+  <a class="mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" href="{{ message.url }}" data-message-id="{{ message.id }}">
+    <span class="mail-top"><span class="subject">{{ message.subject|default:"(No subject)" }} {% include "includes/attachment_badge.html" with count=message.attachment_count %}</span><time datetime="{{ message.date|date:'c' }}" title="{{ message.date|date:'M j, Y, H:i T' }}">{{ message.date|date:"M j, H:i" }}</time></span>
+    <span class="sender">{{ message.sender }}</span>
+  </a>
+  {% empty %}<p class="empty">No messages here.</p>{% endfor %}
+</div>
+{% if previous_url or next_url %}
+<nav class="pagination" aria-label="Message pages">
+  {% if previous_url %}<a href="{{ previous_url }}">First page</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">Older messages</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

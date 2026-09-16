@@ -5,25 +5,47 @@ description = "A personal Gmail client to manage a busy inbox without missing wh
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    # Call OpenAI with structured classification responses.
     "callable-ai>=0.1.8",
+    # HTTP views, forms, ORM, and migrations.
+    "django>=6.0,<6.1",
+    # Gmail API client for sync, search, reading, labels, and archiving.
     "google-api-python-client>=2.200.0",
+    # Authenticated HTTP transport for the Gmail client.
     "google-auth-httplib2>=0.4.2",
+    # Google OAuth authorization-code flow with offline access and PKCE.
     "google-auth-oauthlib>=1.4.1",
+    # Plain-text fallback and AI input for HTML-only emails; nh3 handles HTML sanitization.
     "html2text>=2025.4.15",
-    "itsdangerous>=2.2.0",
+    # Sanitize formatted email with a strict HTML/CSS allowlist.
+    "nh3>=0.3.6",
+    # Define and validate the structured AI classification schema.
     "pydantic>=2.13.5",
-    "starlette",
+    # Count input tokens and enforce message/batch budgets before AI requests.
+    "tiktoken>=0.14.0",
+    # Serve Django over ASGI; standard adds optimized server dependencies.
     "uvicorn[standard]",
 ]
 
 [dependency-groups]
 dev = [
+    # Django type information for static checking.
+    "django-stubs>=6.0,<6.1",
+    # Type information for dynamically generated Gmail client methods.
     "google-api-python-client-stubs>=1.40.0",
+    # HTTP client; currently unused (tests import httpx, not httpx2).
     "httpx2>=2.12.0",
+    # Run formatting, type, and file-safety checks before commits.
     "pre-commit",
+    # Test runner and fixtures.
     "pytest",
+    # Bind user-provided Gherkin scenarios to pytest steps.
     "pytest-bdd",
+    # Isolated Django databases and settings for tests.
+    "pytest-django>=4.14.0",
+    # Python linting, import sorting, and formatting.
     "ruff",
+    # Static Python type checking.
     "ty",
 ]
 
@@ -31,6 +53,7 @@ dev = [
 package = false
 
 [tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "mailsome.settings"
 testpaths = ["tests"]
 pythonpath = ["."]
 bdd_features_base_dir = "tests/features"
@@ -38,3 +61,6 @@ addopts = "--tb=short --durations=10"
 
 [tool.ruff.lint]
 extend-select = ["I"]
+
+[tool.ruff.lint.per-file-ignores]
+"*/migrations/*.py" = ["RUF012", "SIM118"]
