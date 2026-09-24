@@ -4,7 +4,7 @@ A personal Gmail client to manage a busy inbox without missing what matters.
 
 - Custom classifications
 - Add sender based rules
-- Tell LLMs about your classification rules
+- Describe label categories and email importance for Jev
 - Custom tabs
 - Sender Bundling
 - View list in open mode [upcoming]
@@ -12,8 +12,8 @@ A personal Gmail client to manage a busy inbox without missing what matters.
 ## Stack
 
 Django 6 templates/forms, SQLite, and small vanilla JavaScript enhancements.
-Gmail APIs provide mail access; two supervised management-command loops handle
-sync and classification. No task broker or external scheduler.
+Gmail APIs provide mail access; two periodic worker threads handle
+sync and classification alongside the web server. No task broker or external scheduler.
 
 ## Development
 
@@ -27,8 +27,9 @@ just test                 # Or: just test -k search
 uv run pre-commit run --all-files
 ```
 
-Open `http://localhost:8002`. Ctrl+C stops all processes. There is no hot reload;
+Open `http://localhost:8002`. Ctrl+C stops the server and both workers. There is no hot reload;
 restart after code changes. Run `uv lock` after changing dependencies.
+`just run` prints request logs and local error tracebacks; browser errors stay sanitized.
 
 BDD scenarios belong in `tests/features/`, with bindings in `tests/test_*.py`.
 Tests use fake providers and temporary databases, not your mailbox.
@@ -51,37 +52,56 @@ Tests use fake providers and temporary databases, not your mailbox.
   and archived messages. There is no fixed message-count window or background
   inbox preload. Sender rules and optional AI operate on locally cached inbox
   mail; browsing can make previously unloaded inbox mail eligible.
-- **Changes:** background updates offer a reload link rather than taking you away
-  from your open email or editor. **Refresh** requests an earlier sync.
+- **Changes:** status shows the last successful sync and pending classifications,
+  polling roughly once a minute. Reload to see changed mail; **Refresh** requests
+  an earlier sync.
+
+## AI settings
+
+Enable AI in **Settings**, using a TypeSafe API key entered there or supplied through
+`TYPESAFE_API_KEY`. Local configuration lives in `data/typesafe.json`.
+
+- Each label has an editable description and acceptance threshold (default **0.75**).
+- **Edit importance settings** defines ordered scoring levels and the **Important**
+  list badge threshold (default: score **>0.7**). The reader sidebar shows the **0–1**
+  score. Threshold changes apply immediately; inbox sorting is unchanged.
+- Classification criteria edits affect future classifications; use **Reclassify
+  cached inbox** to revisit stored scores and labels.
+- Usage history records outcomes, tokens, and estimated costs—not mail or credentials.
+  Unknown costs remain unknown.
 
 ## Background workers
 
 - **Two workers** run alongside the web server with `just run`: sync and AI
-  classification. Both check for queued work about once a second when idle.
+  classification. Each runs independently at roughly one-minute intervals.
   Opening a page does not start workers; downloaded mail is picked up on a later pass.
 - **Sync — on connection, startup, and roughly every minute:** read changes since
   the saved cursor. Fetch details for newly encountered emails and update labels
   for cached emails affected by changes. Do not list or preload existing inbox mail.
   Refresh, rule edits, and successful label writes can request an earlier pass.
-- **Expired history:** save a fresh cursor and keep cached mail and AI decisions.
-  Changes in the missed interval are not rebuilt. Cached labels may stay stale
-  until a later detail read or history event updates that message.
+  Browsing and sync persist downloaded messages directly through `inbox/utils.py`;
+  downloads use batches of up to 50.
+- **Expired history:** capture a fresh cursor, then fetch arrivals since the last
+  successful sync minus one minute. Older label changes and deletions are not
+  recovered. Save the replacement cursor and timestamp after persistence succeeds.
 - **Sender rules — after sync:** compare cached inbox emails with sender rules
   and add missing labels in bulk. This runs even when AI is disabled or paused.
-- **AI — queued after successful sync and sender labeling:** if enabled,
-  classify unprocessed cached inbox mail using your label descriptions and mail
-  context, then apply labels in bulk. Continue batches without waiting for the
-  next scheduled sync. Archived mail, spam, trash, and drafts are excluded.
+- **AI — independently scans stored mail:** if enabled, process up to 100 emails
+  per pass with TypeSafe's SDK and `jev-1.13.0`, one email request at a time. Each
+  request includes a Noul per enabled label and an importance Score, even without
+  enabled labels. Send stored text, metadata, attachment names, and mail context;
+  exclude HTML and attachment contents. Continue passes while eligible mail remains.
+  Archived mail, spam, trash, drafts, and messages without stored bodies are excluded.
 - **Reclassify cached inbox:** explicitly reset the selected AI-enabled labels,
   preserving assignments justified by current sender rules. Other assignments of
-  those labels, including manual ones, are removed before AI runs again. The sync
-  worker retains interrupted resets for retry; AI waits until cached labels are refreshed.
-- **Overlapping work:** message fetches and saves take turns with other mailbox
-  operations. Sync releases the lock between messages, so a reader does not wait
-  for an entire sync pass. Sync can run while an AI response is pending.
+  those labels, including manual ones, are removed before AI runs again. Confirmation
+  resets labels and scores for the regular worker, including importance-only setups.
+  Failed or interrupted resets require confirmation again.
 - **Retries:** keep successful downloads but advance the history cursor only when
   the pass succeeds. Gmail quota limits cause a wait before retrying. Failed or
-  interrupted AI requests pause until **Refresh**, since they may have incurred a charge.
+  interrupted AI requests retry automatically, up to three total attempts per email
+  across restarts; retries can incur charges. Saved decisions retry label writes
+  without another model call, including on idle passes.
 
 The database is `data/mailsome.sqlite3`. Stop the app and its workers before
 applying migrations.

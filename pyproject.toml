@@ -5,8 +5,6 @@ description = "A personal Gmail client to manage a busy inbox without missing wh
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    # Call OpenAI with structured classification responses.
-    "callable-ai>=0.1.8",
     # HTTP views, forms, ORM, and migrations.
     "django>=6.0,<6.1",
     # Gmail API client for sync, search, reading, labels, and archiving.
@@ -19,10 +17,8 @@ dependencies = [
     "html2text>=2025.4.15",
     # Sanitize formatted email with a strict HTML/CSS allowlist.
     "nh3>=0.3.6",
-    # Define and validate the structured AI classification schema.
-    "pydantic>=2.13.5",
-    # Count input tokens and enforce message/batch budgets before AI requests.
-    "tiktoken>=0.14.0",
+    # Typed Jev classification and importance questions.
+    "typesafe-sdk>=0.7.1",
     # Serve Django over ASGI; standard adds optimized server dependencies.
     "uvicorn[standard]",
 ]
@@ -33,7 +29,7 @@ dev = [
     "django-stubs>=6.0,<6.1",
     # Type information for dynamically generated Gmail client methods.
     "google-api-python-client-stubs>=1.40.0",
-    # HTTP client; currently unused (tests import httpx, not httpx2).
+    # Mock HTTP transport for TypeSafe SDK integration tests.
     "httpx2>=2.12.0",
     # Run formatting, type, and file-safety checks before commits.
     "pre-commit",

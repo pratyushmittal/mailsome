@@ -7,6 +7,8 @@ from email.utils import parseaddr
 
 from django.db import models
 
+MAX_AI_ATTEMPTS = 3
+
 
 class Tab(models.Model):
     """A pinned Gmail label and local rules/settings, not a mirror of all Gmail labels."""
@@ -25,6 +27,7 @@ class Tab(models.Model):
     # Preserve existing exact-sender lists during this framework migration.
     people = models.JSONField(default=list, db_default=[])
     auto_classify = models.BooleanField(default=False, db_default=False)
+    acceptance_threshold = models.FloatField(default=0.75, db_default=0.75)
     position = models.IntegerField(default=0, db_default=0)
 
     class Meta:
@@ -40,6 +43,12 @@ class MessageManager(models.Manager["Message"]):
             models.Q(labels__icontains='"SPAM"')
             | models.Q(labels__icontains='"TRASH"')
             | models.Q(labels__icontains='"DRAFT"')
+        )
+
+    def classifiable(self) -> models.QuerySet[Message]:
+        """Stored inbox mail with complete content and an unexhausted AI retry budget."""
+        return self.inbox().filter(
+            ai_classified=False, ai_attempts__lt=MAX_AI_ATTEMPTS, body__isnull=False
         )
 
 
@@ -58,6 +67,14 @@ class Message(models.Model):
     # NULL means old cache metadata has not yet been checked for attachments.
     attachment_count = models.PositiveIntegerField(null=True)
     body = models.TextField(null=True)
+    importance = models.FloatField(
+        null=True, help_text="Jev importance normalized from 0 (lowest) to 1 (highest)."
+    )
+    ai_attempts = models.PositiveSmallIntegerField(
+        default=0,
+        db_default=0,
+        help_text="Paid classification attempts, including uncertain/interrupted calls. Three total attempts: the initial request plus two retries.",
+    )
     ai_classified = models.BooleanField(
         default=False,
         db_default=False,

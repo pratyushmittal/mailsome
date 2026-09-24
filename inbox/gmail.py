@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
+import random
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import google_auth_httplib2
 import httplib2
 from django.conf import settings
-from django.db import transaction
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -31,26 +29,14 @@ if TYPE_CHECKING:
     from googleapiclient._apis.gmail.v1.schemas import Message as GmailMessage
 
 from accounts.models import Account
+from inbox import utils
 from inbox.models import Message
-from inbox.utils import message_from_gmail, save_or_create_message
-from jobs.runtime import mailbox_lock
+from mailsome.errors import APIError
+from mailsome.utilities import atomic_write
 
 MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 FILTER_SCOPE = "https://www.googleapis.com/auth/gmail.settings.basic"
 SCOPES = [MODIFY_SCOPE, FILTER_SCOPE]
-Progress = Callable[[str, int, int | None], None]
-
-
-def atomic_write(path: Path, content: str) -> None:
-    """Replace a file via a sibling temporary file, keeping owner-only (0600) permissions."""
-    # Readers see the old or complete new file, never partially written content.
-    temporary = path.with_suffix(".tmp")
-    with os.fdopen(
-        os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
-    ) as file:
-        file.write(content)
-    temporary.chmod(0o600)
-    temporary.replace(path)
 
 
 @contextmanager
@@ -88,7 +74,7 @@ def service(credentials: Credentials | None = None) -> Iterator[GmailResource]:
 def get_message_details(client: GmailResource, message_id: str) -> GmailMessage | None:
     """Fetch complete parsed email details, including inline text/HTML and MIME parts.
 
-    Callers persist the response with save_or_create_message(), which also fills
+    Callers persist received data through the shared update function, which fills
     missing body caches. This avoids a second detail request when that message
     is later opened or classified. Existing cached messages still use lightweight
     label-only requests during sync.
@@ -115,58 +101,95 @@ def get_message_details(client: GmailResource, message_id: str) -> GmailMessage 
         raise
 
 
-def update_message(
-    client: GmailResource, message_id: str, *, labels_only: bool = False
-) -> None:
-    """Fetch and save current message state, serializing with other mailbox reads/writes.
-
-    Normally fetch full details and fill missing bodies without overwriting saved
-    content or AI completion. History sync uses labels_only=True for cached mail
-    to avoid downloading content again. A Gmail 404 removes the cached message.
-    Callers must not already hold mailbox_lock; this function owns fetch/save locking.
-    """
-    with mailbox_lock():
-        message = (
-            _get_message_labels(client, message_id)
-            if labels_only
-            else get_message_details(client, message_id)
-        )
-        with transaction.atomic():
-            # A message can be deleted between its listing/history event and this fetch.
-            if message is None:
-                Message.objects.filter(pk=message_id).delete()
-            elif labels_only:
-                Message.objects.filter(pk=message_id).update(
-                    labels=message.get("labelIds", [])
-                )
-            else:
-                save_or_create_message(message)
+def _retryable_read_error(error: Exception) -> bool:
+    """Retry only Gmail server failures and rate-limit responses."""
+    if not isinstance(error, HttpError):
+        return False
+    if error.resp.status in {429, 500, 502, 503, 504}:
+        return True
+    details = error.error_details if isinstance(error.error_details, list) else []
+    return error.resp.status == 403 and any(
+        isinstance(item, dict)
+        and item.get("reason") in {"rateLimitExceeded", "userRateLimitExceeded"}
+        for item in details
+    )
 
 
-def _get_message_labels(client: GmailResource, message_id: str) -> GmailMessage | None:
-    """Read current labels for a cached message touched by a history event.
+def _download_batch(
+    client: GmailResource,
+    message_ids: list[str],
+    known: set[str],
+) -> tuple[dict[str, GmailMessage | None], dict[str, Exception]]:
+    """Execute one batch without persistence or retries; None marks a missing message."""
+    downloaded: dict[str, GmailMessage | None] = {}
+    errors: dict[str, Exception] = {}
 
-    Full details also include labels, but history sync does not need to download
-    saved bodies again. Return None on deletion; other provider errors propagate.
-    Browsing saves labels whenever full details arrive; AI uses the local snapshot.
-    """
-    try:
-        return (
-            client.users()
-            .messages()
-            .get(
+    def received(message_id: str, response: Any, error: Exception | None) -> None:
+        if isinstance(error, HttpError) and error.resp.status == 404:
+            downloaded[message_id] = None
+        elif error is not None:
+            errors[message_id] = error
+        else:
+            downloaded[message_id] = cast("GmailMessage", response)
+
+    batch = client.new_batch_http_request(callback=received)
+    messages = client.users().messages()
+    for message_id in message_ids:
+        if message_id in known:
+            request = messages.get(
                 userId="me",
                 id=message_id,
                 format="minimal",
                 fields="id,threadId,labelIds",
             )
-            .execute(num_retries=2)
-        )
+        else:
+            request = messages.get(userId="me", id=message_id, format="full")
+        batch.add(request, request_id=message_id)
+    try:
+        batch.execute()
     except HttpError as error:
-        # History or a page can reference mail deleted before its details are read.
-        if error.resp.status == 404:
-            return None
-        raise
+        errors.update(
+            (message_id, error)
+            for message_id in message_ids
+            if message_id not in downloaded
+        )
+    return downloaded, errors
+
+
+def update_messages(
+    client: GmailResource,
+    message_ids: list[str],
+    *,
+    labels_only: bool = False,
+) -> None:
+    """Persist batches of 50, retrying server and rate-limit failures up to twice."""
+    known = (
+        set(Message.objects.filter(pk__in=message_ids).values_list("id", flat=True))
+        if labels_only
+        else set()
+    )
+    for start in range(0, len(message_ids), 50):
+        pending = message_ids[start : start + 50]
+        failures: list[Exception] = []
+        for attempt in range(3):
+            downloaded, errors = _download_batch(client, pending, known)
+            for message_id, response in downloaded.items():
+                utils.apply_message_update(
+                    response if response is not None else {"id": message_id},
+                    labels_only=message_id in known,
+                    deleted=response is None,
+                )
+            pending = []
+            for message_id, error in errors.items():
+                if attempt < 2 and _retryable_read_error(error):
+                    pending.append(message_id)
+                else:
+                    failures.append(error)
+            if not pending:
+                break
+            time.sleep(random.random() * 2 ** (attempt + 1))
+        if failures:
+            raise failures[0]
 
 
 def get_message_page(
@@ -196,15 +219,12 @@ def get_message_page(
 def get_messages_for_list(
     client: GmailResource,
     message_ids: list[str],
-    *,
-    report: Progress = lambda stage, completed, total: None,
 ) -> list[Message]:
     """Load messages for IDs returned by a Gmail list/search, in that same order.
 
     Read existing rows without their large bodies. Fetch and save full details
     for each missing unique ID, including labels and bodies. Existing rows are
     reused, not downloaded again. Preserve duplicate IDs and skip deleted mail.
-    The report callback counts missing-ID requests, including deletions.
     """
     cached = {
         message.id: message
@@ -217,10 +237,7 @@ def get_messages_for_list(
             message_id for message_id in message_ids if message_id not in cached
         )
     )
-    report("headers", 0, len(missing))
-    for index, message_id in enumerate(missing):
-        update_message(client, message_id)
-        report("headers", index + 1, len(missing))
+    update_messages(client, missing)
     cached.update(
         (message.id, message)
         for message in Message.objects.defer("body", "rich_body").filter(pk__in=missing)
@@ -230,28 +247,24 @@ def get_messages_for_list(
 
 def sync(
     client: GmailResource,
-    *,
-    report: Progress = lambda stage, completed, total: None,
 ) -> None:
-    """Apply Gmail history changes; never list or preload an inbox window.
+    """Apply Gmail history changes and recover recent mail after cursor expiry.
 
     The sync worker calls this on startup, roughly every minute, and on Refresh
     or rule edits. With no cursor, capture one without downloading existing mail.
-    An expired cursor is replaced too: keep cached mail and AI decisions, accepting
-    that changes in the lost interval stay stale until a later read or event.
+    On expiry, capture a fresh cursor before fetching mail since the last sync,
+    overlapping by one minute. Date-based recovery cannot reconstruct deletions
+    or changes to older mail.
 
     Fetch details for newly encountered messages and only labels for cached ones.
-    Each fetch/save holds mailbox_lock so browsing cannot overwrite it out of
-    order; release the lock between messages so readers need not wait for a whole
-    sync. Save progress directly, but advance the cursor only after all history
-    pages succeed. Failures replay that interval safely on the next pass.
-    Sender rules and AI run afterward in the worker, not in this function.
+    Persist directly through the shared message-update function. Advance the cursor
+    only after all history pages and message updates succeed. Failures replay that
+    interval on the next pass. AI independently scans stored mail.
     """
-    cursor = Account.objects.get(pk=1).history_id
+    account = Account.objects.get(pk=1)
+    cursor = account.history_id
     page_token = None
-    completed = 0
     while cursor is not None:
-        report("history", completed, None)
         try:
             page = (
                 client.users()
@@ -265,7 +278,6 @@ def sync(
                 .execute(num_retries=2)
             )
         except HttpError as error:
-            # Expired history loses an interval; keep the cache and resume from a fresh anchor.
             if error.resp.status != 404:
                 raise
             cursor = None
@@ -279,55 +291,62 @@ def sync(
             deleted.update(
                 item["message"]["id"] for item in event.get("messagesDeleted", [])
             )
-        with mailbox_lock():
-            Message.objects.filter(pk__in=deleted).delete()
-        for message_id in sorted(changed - deleted):
-            update_message(
-                client,
-                message_id,
-                labels_only=Message.objects.filter(pk=message_id).exists(),
-            )
-            completed += 1
-            report("changes", completed, None)
+        for message_id in sorted(deleted):
+            utils.apply_message_update({"id": message_id}, deleted=True)
+        update_messages(client, sorted(changed - deleted), labels_only=True)
         page_token = page.get("nextPageToken")
         # A page token is not a durable history cursor; acknowledge only the completed interval.
         if not page_token:
             cursor = page["historyId"]
             break
 
-    # First connection and expired history start here, without a separate message preload.
     if cursor is None:
+        # Anchor first so subsequent history includes changes during recovery.
         cursor = get_profile(client)["historyId"]
+        if account.history_id is not None and account.synced_at is not None:
+            query = f"after:{account.synced_at // 1000 - 60}"
+            page_token = None
+            has_more_pages = True
+            while has_more_pages:
+                messages_page = get_message_page(
+                    client, query=query, page_token=page_token
+                )
+                update_messages(
+                    client,
+                    [message["id"] for message in messages_page.get("messages", [])],
+                    labels_only=True,
+                )
+                page_token = messages_page.get("nextPageToken")
+                has_more_pages = bool(page_token)
     Account.objects.filter(pk=1).update(
         history_id=cursor, synced_at=int(time.time() * 1000)
     )
-    report("complete", completed, completed)
 
 
 def get_thread_messages(client: GmailResource, thread_id: str) -> list[Message]:
     """Fetch conversation details and save current labels and missing bodies."""
-    with mailbox_lock():
-        thread = (
-            client.users()
-            .threads()
-            .get(
-                userId="me",
-                id=thread_id,
-                format="full",
-            )
-            .execute(num_retries=2)
+    thread = (
+        client.users()
+        .threads()
+        .get(
+            userId="me",
+            id=thread_id,
+            format="full",
         )
-        for message in thread.get("messages", []):
-            # Draft content can change; it is not part of this immutable-message cache.
-            if "DRAFT" not in message.get("labelIds", []):
-                save_or_create_message(message)
-    return sorted(
-        [
-            message_from_gmail(message)
-            for message in thread.get("messages", [])
-            if "DRAFT" not in message.get("labelIds", [])
-        ],
-        key=lambda message: (message.received_at, message.id),
+        .execute(num_retries=2)
+    )
+    # Draft content can change; it is not part of the immutable-message store.
+    received = [
+        message
+        for message in thread.get("messages", [])
+        if "DRAFT" not in message.get("labelIds", [])
+    ]
+    for message in received:
+        utils.apply_message_update(message)
+    return list(
+        Message.objects.filter(pk__in=[message["id"] for message in received]).order_by(
+            "received_at", "id"
+        )
     )
 
 
@@ -427,14 +446,15 @@ def add_label_to_messages(
 def remove_label_from_messages(
     client: GmailResource, messages: list[Message], label_id: str
 ) -> None:
-    """Remove one label from up to 1,000 messages; history refreshes cached labels."""
-    client.users().messages().batchModify(
-        userId="me",
-        body={
-            "ids": [message.id for message in messages],
-            "removeLabelIds": [label_id],
-        },
-    ).execute(num_retries=2)
+    """Remove one label in chunks of up to 1,000; callers own reset policy and refresh."""
+    for start in range(0, len(messages), 1_000):
+        client.users().messages().batchModify(
+            userId="me",
+            body={
+                "ids": [message.id for message in messages[start : start + 1_000]],
+                "removeLabelIds": [label_id],
+            },
+        ).execute(num_retries=2)
 
 
 def archive_thread(client: GmailResource, thread_id: str) -> None:
@@ -474,3 +494,60 @@ def delete_filter(client: GmailResource, filter_id: str) -> None:
         # A previous delete may have succeeded before acknowledgement, or in another session.
         if error.resp.status != 404:
             raise
+
+
+def _sender_filter_body(label_id: str, senders: list[str]) -> Filter:
+    # Quote addresses as data, not Gmail operators; matching itself belongs to Gmail.
+    return {
+        "criteria": {
+            "query": "{"
+            + " ".join(
+                f"from:{json.dumps(sender, ensure_ascii=False)}"
+                for sender in sorted(set(senders))
+            )
+            + "}"
+        },
+        "action": {"addLabelIds": [label_id]},
+    }
+
+
+def _filter_matches(remote: Mapping[str, Any], body: Filter) -> bool:
+    # Gmail can return empty optional fields; extra nonempty criteria/actions must match too.
+    return {
+        key: {
+            name: value
+            for name, value in remote.get(key, {}).items()
+            if value not in (None, "", [], False)
+        }
+        for key in ("criteria", "action")
+    } == body
+
+
+def replace_sender_filter(
+    client: GmailResource, label_id: str, previous: list[str], senders: list[str]
+) -> None:
+    """Replace exact sender criteria/actions without claiming ownership of other filters."""
+    remote = list_filters(client)
+    previous_body = _sender_filter_body(label_id, previous)
+    desired_body = _sender_filter_body(label_id, senders)
+    old = [item for item in remote if previous and _filter_matches(item, previous_body)]
+    desired = [
+        item for item in remote if senders and _filter_matches(item, desired_body)
+    ]
+    # Duplicate exact matches are ambiguous, including user-created copies.
+    if len(old) > 1 or len(desired) > 1:
+        raise APIError(
+            409,
+            "Multiple matching Gmail filters found. Remove duplicates in Gmail and retry this edit.",
+        )
+    # After an uncertain creation, reuse the exact match instead of creating duplicates.
+    if senders and not desired:
+        result = create_filter(client, desired_body)
+        # Do not remove the old rule without confirmation that replacement succeeded.
+        if not isinstance(result.get("id"), str) or not result["id"]:
+            raise APIError(
+                502,
+                "Gmail did not confirm filter creation. Retry this edit to check the result.",
+            )
+    for item in old:
+        delete_filter(client, item["id"])

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Importance settings · Mailsome{% endblock %}
+{% block content %}
+<section class="settings-page" data-editor>
+  <a class="back quiet" href="/settings/" data-cancel>← Settings</a>
+  <h1>Importance settings</h1>
+  <p>Describe what makes an email important to you, from lowest to highest. Every eligible email is scored, even without AI-enabled labels. Scores are stored from 0 (lowest) to 1 (highest).</p>
+  <form method="post" class="form-panel">
+    {% csrf_token %}
+    {% include "includes/form_fields.html" %}
+    <button type="submit">Save importance settings</button>
+  </form>
+</section>
+{% endblock %}

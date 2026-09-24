@@ -1,26 +1,31 @@
-"""Explicit form submissions schedule work; the only JSON endpoint reports progress."""
+"""Explicit refresh and minute-level sync/classification status."""
 
-from django import forms
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.http import require_http_methods
 
-from jobs.runtime import progress_state
-from jobs.tasks import enqueue
+from accounts.models import Account
+from inbox.models import Message
+from jobs.pipeline import sync_requested
 from mailsome.errors import APIError
 from mailsome.utilities import redirect_next
 
 
 @require_http_methods(["POST"])
 def refresh(request: HttpRequest) -> HttpResponse:
-    # This explicit retry requires a connected account, just like scheduled sync.
     if not (settings.DATA_DIR / "token.json").exists():
         raise APIError(401, "Connect Gmail first.")
-    retry_ai = forms.BooleanField(required=False).clean(request.POST.get("retry_ai"))
-    enqueue("sync", explicit=retry_ai)
+    sync_requested.set()
     return redirect_next(request)
 
 
 @require_http_methods(["GET"])
-def progress(request: HttpRequest) -> HttpResponse:
-    return JsonResponse(progress_state())
+def sync_status(request: HttpRequest) -> HttpResponse:
+    return JsonResponse(
+        {
+            "synced_at": Account.objects.filter(pk=1)
+            .values_list("synced_at", flat=True)
+            .first(),
+            "classifications_due": Message.objects.classifiable().count(),
+        }
+    )

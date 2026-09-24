@@ -18,11 +18,25 @@ if TYPE_CHECKING:
 RECIPIENT_HEADERS = ("To", "Cc", "Bcc", "Delivered-To")
 
 
+def apply_message_update(
+    message: GmailMessage, *, labels_only: bool = False, deleted: bool = False
+) -> None:
+    """Persist only the Gmail-owned fields of one received message/update."""
+    if deleted:
+        Message.objects.filter(pk=message["id"]).delete()
+    elif labels_only:
+        # A minimal Gmail read is a complete label snapshot; omitted labels mean none.
+        Message.objects.filter(pk=message["id"]).update(
+            labels=message.get("labelIds", [])
+        )
+    else:
+        save_or_create_message(message)
+
+
 def save_or_create_message(message: GmailMessage) -> None:
     """Save received metadata and labels, filling only missing body caches.
 
-    The caller serializes the Gmail fetch and save with mailbox_lock. Update
-    explicit metadata fields, never overwrite AI completion or downloaded bodies.
+    Use ordinary ORM writes for Gmail-owned fields, preserving AI-owned state.
     Preserve attachment counts when the response lacks enough MIME structure.
     """
     converted = message_from_gmail(message)

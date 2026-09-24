@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core.cache import caches
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Max
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
@@ -27,14 +27,13 @@ if TYPE_CHECKING:
     from googleapiclient._apis.gmail.v1.schemas import Label
 
 from accounts.models import Account
-from classifications import sender_filters
+from classifications import utils as classification_utils
 from classifications.models import LabelDecision
-from inbox import content, gmail
+from inbox import content, gmail, sender_filters
 from inbox.forms import SenderForm, TabForm, UnsubscribeForm
 from inbox.models import Message, Sender, Tab
-from inbox.utils import message_from_gmail, save_or_create_message
-from jobs.runtime import label_policy_lock, mailbox_lock
-from jobs.tasks import enqueue
+from inbox.utils import apply_message_update, message_from_gmail
+from jobs.pipeline import sync_requested
 from mailsome.errors import APIError, gmail_denial
 from mailsome.utilities import page, redirect_next, safe_next
 
@@ -44,65 +43,68 @@ def inbox(request: HttpRequest) -> HttpResponse:
     # A disconnected installation renders safely without evaluating saved Gmail queries.
     if not Account.objects.filter(pk=1).exists():
         return page(request, "inbox/list.html", {"messages": []})
-    # Sender results share the on-demand cache but never select messages for AI.
+    importance_threshold = classification_utils.settings()["importance_threshold"]
+    # Sender searches use the same message store as tab browsing.
     if request.GET.get("sender"):
-        return page(request, "inbox/list.html", sender_context(request))
-    query = request.GET.get("q", "").strip()
-    tab_id = request.GET.get("tab")
-    # Snapshot typed pins before provider I/O, as the old eager helper did.
-    configured = list(Tab.objects.all())
-    labels = [] if query else ["INBOX"]
-    # Read-only page selection must not wait behind an entire background sync.
-    with gmail.service() as client:
-        if not query and tab_id:
-            tab = next((tab for tab in configured if str(tab.pk) == tab_id), None)
-            # Pins may be removed in another browser while their URL is still open.
-            if tab is None:
-                raise APIError(404, "This label tab no longer exists. Select Others.")
-            if tab.label_id:
-                labels.append(tab.label_id)
-            else:
-                query = tab.query
-        elif not query:
-            # Gmail queries exclude by name; resolve current names so external renames stay correct.
-            names = (
-                {label["id"]: label["name"] for label in gmail.list_labels(client)}
-                if configured
-                else {}
-            )
-            query = " ".join(
-                f"-label:{json.dumps(names[tab.label_id])}"
-                if tab.label_id in names
-                else f"-({tab.query})"
-                if tab.query
-                else ""
-                for tab in configured
-            )
-        try:
-            result = gmail.get_message_page(
-                client, query=query, labels=labels, page_token=request.GET.get("page")
-            )
-            messages = gmail.get_messages_for_list(
-                client, [item["id"] for item in result.get("messages", [])]
-            )
-        except HttpError as error:
-            # Bad search syntax or an expired page token needs a fresh page, not local fallback results.
-            if error.resp.status == 400:
-                raise APIError(
-                    400,
-                    "Gmail could not run this search or page. Check the query or return to the first page.",
-                ) from None
-            raise
-    add_message_urls(request, messages)
-    return page(
-        request,
-        "inbox/list.html",
-        {
+        context = sender_context(request)
+    else:
+        query = request.GET.get("q", "").strip()
+        tab_id = request.GET.get("tab")
+        configured = list(Tab.objects.all())
+        labels = [] if query else ["INBOX"]
+        with gmail.service() as client:
+            if not query and tab_id:
+                tab = next((tab for tab in configured if str(tab.pk) == tab_id), None)
+                # Pins may be removed in another browser while their URL is still open.
+                if tab is None:
+                    raise APIError(
+                        404, "This label tab no longer exists. Select Others."
+                    )
+                if tab.label_id:
+                    labels.append(tab.label_id)
+                else:
+                    query = tab.query
+            elif not query:
+                # Gmail queries exclude by name; resolve current names so external renames stay correct.
+                names = (
+                    {label["id"]: label["name"] for label in gmail.list_labels(client)}
+                    if configured
+                    else {}
+                )
+                query = " ".join(
+                    f"-label:{json.dumps(names[tab.label_id])}"
+                    if tab.label_id in names
+                    else f"-({tab.query})"
+                    if tab.query
+                    else ""
+                    for tab in configured
+                )
+            try:
+                result = gmail.get_message_page(
+                    client,
+                    query=query,
+                    labels=labels,
+                    page_token=request.GET.get("page"),
+                )
+                messages = gmail.get_messages_for_list(
+                    client, [item["id"] for item in result.get("messages", [])]
+                )
+            except HttpError as error:
+                # Bad search syntax or an expired page token needs a fresh page, not local fallback results.
+                if error.resp.status == 400:
+                    raise APIError(
+                        400,
+                        "Gmail could not run this search or page. Check the query or return to the first page.",
+                    ) from None
+                raise
+        add_message_urls(request, messages)
+        context = {
             "messages": messages,
             "query": request.GET.get("q", ""),
             **_pagination(request, result.get("nextPageToken")),
-        },
-    )
+        }
+    context["importance_threshold"] = importance_threshold
+    return page(request, "inbox/list.html", context)
 
 
 def _pagination(request: HttpRequest, next_page: str | None) -> dict[str, str]:
@@ -153,12 +155,12 @@ def save_tab(
     # Only creation/editing needs label resolution; unpinning retains the Gmail label.
     if not delete:
         require_label_access()
-        # Descriptions/sender rules/AI preferences belong here, not in Gmail's label picker.
+        # Local preference edits do not need a Gmail label lookup.
         if existing and existing.label_id and values["name"] == existing.name:
             selected = {"id": existing.label_id, "name": existing.name}
         else:
             # New labels, legacy conversions and changed names still need Gmail resolution.
-            # Provider I/O holds neither the sync lock nor a database transaction.
+            # Resolve labels before saving local tab changes.
             with gmail.service() as client:
                 available = gmail.list_labels(client)
                 selected = next(
@@ -205,65 +207,46 @@ def save_tab(
                             ) from None
                         raise
 
-    with label_policy_lock():
-        current = Tab.objects.filter(pk=tab_id).first()
-        # Gmail resolution may take time: never resurrect a concurrently deleted or converted tab.
-        if tab_id is not None and current is None:
-            raise APIError(404, "This label tab no longer exists.")
-        # A concurrent conversion/rename must not be overwritten by a stale provider result.
-        if (
-            current
-            and existing
-            and (current.label_id, current.name) != (existing.label_id, existing.name)
-        ):
-            raise APIError(
-                409, "This label tab changed. Reload its editor and try again."
-            )
-        # Finish filter I/O before opening a database write transaction.
-        if delete and current:
-            sender_filters.replace(current.label_id, current.people, [])
-        elif not delete:
-            assert selected is not None
-            values = {
-                **values,
-                "name": selected["name"],
-                "label_id": selected["id"],
-                "query": "",
-            }
-            previous_people = (
-                current.people if current and current.label_id == selected["id"] else []
-            )
-            # A converted tab must retire its old filter without changing historical labels.
-            if current and current.label_id != selected["id"]:
-                sender_filters.replace(current.label_id, current.people, [])
-            sender_filters.replace(selected["id"], previous_people, values["people"])
+    # Finish filter I/O before saving local tab changes.
+    if delete and existing:
+        sender_filters.replace(existing.label_id, existing.people, [])
+    elif not delete:
+        assert selected is not None
+        values = {
+            **values,
+            "name": selected["name"],
+            "label_id": selected["id"],
+            "query": "",
+        }
+        previous_people = (
+            existing.people if existing and existing.label_id == selected["id"] else []
+        )
+        # A converted tab must retire its old filter without changing historical labels.
+        if existing and existing.label_id != selected["id"]:
+            sender_filters.replace(existing.label_id, existing.people, [])
+        sender_filters.replace(selected["id"], previous_people, values["people"])
 
-        with transaction.atomic():
-            # Removing a tab retains applied history and the Gmail label itself.
-            if delete and current:
+    # Removing a tab retains applied history and the Gmail label itself.
+    if delete and existing:
+        LabelDecision.objects.filter(label_id=existing.label_id, applied=False).delete()
+        existing.delete()
+    elif not delete:
+        # Updates preserve display order; only new pins append a position.
+        if existing:
+            Tab.objects.filter(pk=tab_id).update(**values)
+            # Conversion cancels pending writes to the old label, not applied history.
+            if existing.label_id != values["label_id"]:
                 LabelDecision.objects.filter(
-                    label_id=current.label_id, applied=False
+                    label_id=existing.label_id, applied=False
                 ).delete()
-                current.delete()
-            elif not delete:
-                # Updates preserve display order; only new pins append a position.
-                if current:
-                    Tab.objects.filter(pk=tab_id).update(**values)
-                    # Conversion cancels pending writes to the old label, not applied history.
-                    if current.label_id != values["label_id"]:
-                        LabelDecision.objects.filter(
-                            label_id=current.label_id, applied=False
-                        ).delete()
-                else:
-                    tab_id = Tab.objects.create(
-                        **values,
-                        position=(
-                            Tab.objects.aggregate(value=Max("position"))["value"] or 0
-                        )
-                        + 1,
-                    ).pk
-            # Queue a bounded refresh with the saved settings; filter work is already complete.
-            enqueue("sync")
+        else:
+            tab_id = Tab.objects.create(
+                **values,
+                position=(Tab.objects.aggregate(value=Max("position"))["value"] or 0)
+                + 1,
+            ).pk
+    # Request history sync with the saved settings; filter work is already complete.
+    sync_requested.set()
     return tab_id
 
 
@@ -345,6 +328,7 @@ def tab_edit(request: HttpRequest, tab_id: int | None = None) -> HttpResponse:
             "description": tab.description,
             "people": "\n".join(tab.people),
             "auto_classify": tab.auto_classify,
+            "acceptance_threshold": tab.acceptance_threshold,
         }
         if tab
         else {}
@@ -352,7 +336,7 @@ def tab_edit(request: HttpRequest, tab_id: int | None = None) -> HttpResponse:
     form = TabForm(request.POST if request.method == "POST" else None, initial=initial)
     status = 200
     available: list[Label] = []
-    # Deleting a pin is local-only and must still work after modify consent is revoked.
+    # Unpinning keeps the Gmail label; associated sender filters are removed.
     if request.method == "POST" and request.POST.get("action") == "delete":
         if tab is None:
             form.add_error(None, "Choose an existing tab to remove.")
@@ -407,28 +391,27 @@ def tab_edit(request: HttpRequest, tab_id: int | None = None) -> HttpResponse:
 
 @require_http_methods(["POST"])
 def reorder_tabs(request: HttpRequest) -> HttpResponse:
-    with mailbox_lock(), transaction.atomic():
-        current = list(Tab.objects.values_list("id", flat=True))
-        try:
-            ids = [int(value) for value in request.POST.getlist("order")]
-            # Native move buttons use the authoritative current order under the same lock.
-            if not ids:
-                selected = current.index(int(request.POST.get("tab", "")))
-                direction = request.POST.get("direction")
-                if direction not in {"left", "right"}:
-                    raise ValueError
-                destination = selected + (-1 if direction == "left" else 1)
-                ids = current.copy()
-                # Edge buttons are harmless no-ops; Others is never part of the stored order.
-                if 0 <= destination < len(ids):
-                    ids[selected], ids[destination] = ids[destination], ids[selected]
-        except (ValueError, TypeError):
-            raise APIError(400, "Choose a tab and a valid move direction.") from None
-        # Reject partial/duplicate permutations when another browser changed the tab set.
-        if len(ids) != len(set(ids)) or set(ids) != set(current):
-            raise APIError(409, "Your tabs changed. Reload their order and try again.")
-        for position, tab_id in enumerate(ids):
-            Tab.objects.filter(pk=tab_id).update(position=position)
+    current = list(Tab.objects.values_list("id", flat=True))
+    try:
+        ids = [int(value) for value in request.POST.getlist("order")]
+        # Native move buttons use the currently stored order.
+        if not ids:
+            selected = current.index(int(request.POST.get("tab", "")))
+            direction = request.POST.get("direction")
+            if direction not in {"left", "right"}:
+                raise ValueError
+            destination = selected + (-1 if direction == "left" else 1)
+            ids = current.copy()
+            # Edge buttons are harmless no-ops; Others is never part of the stored order.
+            if 0 <= destination < len(ids):
+                ids[selected], ids[destination] = ids[destination], ids[selected]
+    except (ValueError, TypeError):
+        raise APIError(400, "Choose a tab and a valid move direction.") from None
+    # Reject partial/duplicate permutations when another browser changed the tab set.
+    if len(ids) != len(set(ids)) or set(ids) != set(current):
+        raise APIError(409, "Your tabs changed. Reload their order and try again.")
+    for position, tab_id in enumerate(ids):
+        Tab.objects.filter(pk=tab_id).update(position=position)
     return redirect_next(request)
 
 
@@ -473,11 +456,11 @@ def read_message(message_id: str, *, remote: bool, formatted: bool = False) -> M
         )
     ):
         with gmail.service() as client:
-            gmail.update_message(client, message_id)
+            gmail.update_messages(client, [message_id])
     elif cached.unsubscribe is None or cached.recipients is None:
         # Fetch missing legacy headers; persistence keeps already cached body content.
         with gmail.service() as client:
-            gmail.update_message(client, message_id)
+            gmail.update_messages(client, [message_id])
     result = Message.objects.filter(pk=message_id).first()
     if result is None or result.body is None:
         # A listed message may have been permanently deleted in Gmail.
@@ -496,6 +479,7 @@ def message(request: HttpRequest, message_id: str) -> HttpResponse:
             "name": names[item.label_id],
             "source": item.source,
             "reason": item.reason,
+            "ai_score": item.ai_score,
             "applied": int(item.applied),
         }
         for item in LabelDecision.objects.filter(message_id=message_id).order_by(
@@ -727,46 +711,42 @@ def message_body(request: HttpRequest, message_id: str) -> HttpResponse:
 
 
 def save_sender(email: str, values: dict[str, Any]) -> None:
-    with label_policy_lock():
-        changes: list[tuple[Tab, list[str]]] = []
-        # Note-only edits do not need Gmail access or sender-filter changes.
-        if "labels" in values:
-            require_label_access()
-            configured = list(Tab.objects.all())
-            # A tab may have been removed while the sender editor was open.
-            if not set(values["labels"]).issubset(
-                {tab.label_id for tab in configured if tab.label_id}
-            ):
-                raise APIError(409, "A label tab changed. Reopen the sender menu.")
-            for tab in configured:
-                people = set(tab.people)
-                wanted = tab.label_id in values["labels"]
-                # Unchanged rules must not issue Gmail requests.
-                if (email in people) == wanted:
-                    continue
-                # Validate every tab before changing any remote filters.
-                if wanted and len(people) >= 100:
-                    raise APIError(400, "This label already has 100 sender rules.")
-                changes.append(
-                    (tab, sorted(people | {email} if wanted else people - {email}))
-                )
+    changes: list[tuple[Tab, list[str]]] = []
+    # Note-only edits do not need Gmail access or sender-filter changes.
+    if "labels" in values:
+        require_label_access()
+        configured = list(Tab.objects.all())
+        # A tab may have been removed while the sender editor was open.
+        if not set(values["labels"]).issubset(
+            {tab.label_id for tab in configured if tab.label_id}
+        ):
+            raise APIError(409, "A label tab changed. Reopen the sender menu.")
+        for tab in configured:
+            people = set(tab.people)
+            wanted = tab.label_id in values["labels"]
+            # Unchanged rules must not issue Gmail requests.
+            if (email in people) == wanted:
+                continue
+            # Validate every tab before changing any remote filters.
+            if wanted and len(people) >= 100:
+                raise APIError(400, "This label already has 100 sender rules.")
+            changes.append(
+                (tab, sorted(people | {email} if wanted else people - {email}))
+            )
 
-        for tab, people in changes:
-            sender_filters.replace(tab.label_id, tab.people, people)
+    for tab, people in changes:
+        sender_filters.replace(tab.label_id, tab.people, people)
 
-        # No Gmail I/O while the database is locked; failed remote edits leave old rules for retry.
-        with transaction.atomic():
-            for tab, people in changes:
-                tab.people = people
-                tab.save(update_fields=["people"])
-            # The form may submit a note independently of label selections.
-            if "note" in values:
-                Sender.objects.update_or_create(
-                    email=email, defaults={"note": values["note"]}
-                )
-            # Rule edits also refresh and apply labels in the bounded inbox window.
-            if "labels" in values:
-                enqueue("sync")
+    # Save local changes after remote filter edits succeed.
+    for tab, people in changes:
+        tab.people = people
+        tab.save(update_fields=["people"])
+    # The form may submit a note independently of label selections.
+    if "note" in values:
+        Sender.objects.update_or_create(email=email, defaults={"note": values["note"]})
+    # Rule edits request sync and label application to stored inbox mail.
+    if "labels" in values:
+        sync_requested.set()
 
 
 @require_http_methods(["GET", "POST"])
@@ -816,16 +796,13 @@ def sender_edit(request: HttpRequest) -> HttpResponse:
 def archive(request: HttpRequest, message_id: str) -> HttpResponse:
     try:
         require_label_access()
-        with (
-            mailbox_lock(),
-            gmail.service() as client,
-        ):
+        with gmail.service() as client:
             raw = gmail.get_message_details(client, message_id)
             # Gmail can delete a message between opening its reader and clicking Archive.
             if raw is None:
                 raise APIError(404, "This message is no longer available in Gmail.")
             gmail.archive_thread(client, raw["threadId"])
-            enqueue("sync")
+            sync_requested.set()
             caches["reader"].clear()
     except (APIError, HttpError, RefreshError, OSError) as error:
         status, detail = operation_error(error)
@@ -840,7 +817,7 @@ def archive(request: HttpRequest, message_id: str) -> HttpResponse:
 
 def confirm_unsubscribe(message_id: str) -> None:
     require_label_access()
-    with mailbox_lock(), gmail.service() as client:
+    with gmail.service() as client:
         message = gmail.get_message_details(client, message_id)
         # Recheck advertised metadata at confirmation time, not hidden POST values.
         if message is None:
@@ -858,22 +835,18 @@ def confirm_unsubscribe(message_id: str) -> None:
         )
         if label is None:
             label = gmail.create_label(client, "unsubscribed")
-        save_or_create_message(message)
+        apply_message_update(message)
         gmail.add_label_to_message(client, message_id, label["id"])
-        # Serialize sender edits with label application, just like the tab editor.
-        with label_policy_lock():
-            tab = Tab.objects.filter(label_id=label["id"]).first() or Tab(
-                label_id=label["id"],
-                name=label["name"],
-                position=(Tab.objects.aggregate(value=Max("position"))["value"] or 0)
-                + 1,
-            )
-            people = sorted(set(tab.people) | {summary.sender_email})
-            sender_filters.replace(tab.label_id, tab.people, people)
-            with transaction.atomic():
-                tab.people = people
-                tab.save()
-                enqueue("sync")
+        tab = Tab.objects.filter(label_id=label["id"]).first() or Tab(
+            label_id=label["id"],
+            name=label["name"],
+            position=(Tab.objects.aggregate(value=Max("position"))["value"] or 0) + 1,
+        )
+        people = sorted(set(tab.people) | {summary.sender_email})
+        sender_filters.replace(tab.label_id, tab.people, people)
+        tab.people = people
+        tab.save()
+        sync_requested.set()
 
 
 @require_http_methods(["GET", "POST"])
@@ -883,10 +856,7 @@ def unsubscribe(request: HttpRequest, message_id: str) -> HttpResponse:
     item: Message | None = None
     try:
         # Inspect advertised unsubscribe metadata without fetching any external URL.
-        with (
-            mailbox_lock(),
-            gmail.service() as client,
-        ):
+        with gmail.service() as client:
             raw = gmail.get_message_details(client, message_id)
         if raw is None:
             raise APIError(404, "This message is no longer available in Gmail.")

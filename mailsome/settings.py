@@ -39,12 +39,24 @@ USE_TZ = True
 # Display aware timestamps in IST; keep timezone-aware storage and calculations.
 TIME_ZONE = "Asia/Kolkata"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 128 * 1024
-# Provider tracebacks may include credentials/content. Responses expose only safe errors.
+# Local terminal diagnostics are separate from browser error responses.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"null": {"class": "logging.NullHandler"}},
-    "loggers": {"django.request": {"handlers": ["null"], "propagate": False}},
+    "formatters": {
+        "console": {"format": "{levelname} {name}: {message}", "style": "{"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "formatter": "console",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {
+        "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
 }
 
 # Templates own page/form state; JavaScript only enhances normal links and forms.
@@ -72,3 +84,9 @@ CACHES = {
         "OPTIONS": {"MAX_ENTRIES": 32},
     },
 }
+
+# Shared cadence for the periodic Gmail/AI workers and frontend status polling.
+SYNC_INTERVAL = 60
+
+# Optional environment default; the local AI settings form can save a separate key.
+TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY", "")

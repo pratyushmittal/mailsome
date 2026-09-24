@@ -57,6 +57,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .mail:hover, .mail.highlighted { background: var(--tint); }
 .mail.highlighted { box-shadow: inset 3px 0 var(--accent); }
 .mail-top { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; margin-bottom: 7px; }
+.mail-title { display: flex; align-items: baseline; min-width: 0; }
 .subject { color: #6c6274; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .unread .subject { font-weight: 600; color: #393040; }
 .sender { display: block; font-size: 12px; color: #897b90; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -79,8 +80,7 @@ pre { font-family: inherit; font-size: 14px; line-height: 1.9; white-space: pre-
 .sidebar-note { color: #897b91; font-size: 10px; line-height: 1.6; margin: 20px 0; }
 .more-history { margin-top: 12px; }
 .filter-editor { max-width: 560px; margin: 24px auto; padding: 20px; background: #fffdfb; border: 1px solid var(--edge); border-radius: 12px; }
-.sync-progress { margin: 18px 0; color: #776f7f; font-size: 12px; }
-.sync-progress p { margin: 6px 0; }
+.sync-status { margin: 18px 0; color: #776f7f; font-size: 12px; }
 /* The OAuth setup shares typography without inheriting the inbox layout. */
 .setup { max-width: 850px; margin: auto; padding: 40px 30px; }
 .setup > p, .setup-steps p { line-height: 1.7; }
@@ -189,3 +189,5 @@ a.tab, .add-tab { text-decoration: none; }
 
 .attachment-badge { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 2px 5px; border-radius: 5px; background: #f0eafa; color: #706080; font-size: 11px; font-weight: 500; line-height: 1; vertical-align: middle; white-space: nowrap; }
 .attachment-badge svg { flex-shrink: 0; }
+
+.importance-badge { display: inline-block; flex-shrink: 0; margin-left: 6px; padding: 3px 6px; border-radius: 5px; background: #eaf2e6; color: #42613b; font-size: 11px; font-weight: 500; line-height: 1.2; letter-spacing: normal; vertical-align: middle; white-space: nowrap; }

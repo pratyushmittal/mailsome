@@ -187,38 +187,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (nextTab) { event.preventDefault(); nextTab.click(); }
   });
 
-  const progress = document.querySelector('[data-progress]');
-  // Connected pages keep a normal reload link even when JavaScript is unavailable.
-  if (progress) {
-    function schedulePoll() {
-      // Readers and editors stop polling as soon as their active work finishes.
-      if (progress.dataset.active === 'true') setTimeout(poll, 1000);
-      else if (progress.dataset.pollIdle === 'true' && !document.querySelector('[data-reader], [data-editor]')) setTimeout(poll, 15000);
-    }
-
-    async function poll() {
+  const syncStatus = document.querySelector('[data-sync-status]');
+  if (syncStatus) {
+    const interval = Number(syncStatus.dataset.interval);
+    async function pollSync() {
       try {
-        const response = await fetch('/api/progress', {headers: {'X-Mailsome-Request': '1'}, signal: AbortSignal.timeout(5000)});
-        // Failed requests must not replace the last known progress or page revision.
-        if (!response.ok) throw new Error('Progress unavailable');
-        const status = await response.json();
-        for (const [kind, selector] of [['sync', '[data-sync-status]'], ['labeling', '[data-label-status]']]) {
-          const work = status[kind];
-          const line = progress.querySelector(selector);
-          line.textContent = work.error || `${kind === 'sync' ? 'Sync' : 'Labeling'}: ${work.status} · ${work.stage || ''} ${work.completed ?? 0}${work.total == null ? '' : ' / ' + work.total}`;
-          line.hidden = !['queued', 'running', 'failed'].includes(work.status);
+        const response = await fetch('/api/sync', {headers: {'X-Mailsome-Request': '1'}, signal: AbortSignal.timeout(5000)});
+        if (response.ok) {
+          const {synced_at, classifications_due} = await response.json();
+          syncStatus.querySelector('[data-last-synced]').textContent = synced_at == null ? 'Not yet' : new Intl.DateTimeFormat('en-IN', {
+            timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'medium',
+          }).format(new Date(synced_at)) + ' IST';
+          syncStatus.querySelector('[data-classifications-due]').textContent = classifications_due;
         }
-        progress.querySelector('[data-progress-error]').hidden = true;
-        progress.dataset.active = String([status.sync.status, status.labeling.status].some(value => ['queued', 'running'].includes(value)));
-        // Keep the rendered revision: a notification never replaces mail or navigates away from typing.
-        progress.querySelector('[data-mail-updated]').hidden = String(status.revision ?? '') === progress.dataset.revision;
       } catch {
-        const error = progress.querySelector('[data-progress-error]');
-        error.textContent = 'Cannot retrieve progress. Work may still be running; reload to check.';
-        error.hidden = false;
+        // Retain the last known successful timestamp until the next periodic poll.
       }
-      schedulePoll();
+      setTimeout(pollSync, interval);
     }
-    schedulePoll();
+    setTimeout(pollSync, interval);
   }
 });

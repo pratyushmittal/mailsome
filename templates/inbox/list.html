@@ -11,7 +11,7 @@
 <div class="mail-list inbox">
   {% for message in messages %}
   <a class="mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" href="{{ message.url }}" data-message-id="{{ message.id }}">
-    <span class="mail-top"><span class="subject">{{ message.subject|default:"(No subject)" }} {% include "includes/attachment_badge.html" with count=message.attachment_count %}</span><time datetime="{{ message.date|date:'c' }}" title="{{ message.date|date:'M j, Y, H:i T' }}">{{ message.date|date:"M j, H:i" }}</time></span>
+    <span class="mail-top"><span class="mail-title"><span class="subject">{{ message.subject|default:"(No subject)" }} {% include "includes/attachment_badge.html" with count=message.attachment_count %}</span>{% if message.importance > importance_threshold %}<span class="importance-badge">Important</span>{% endif %}</span><time datetime="{{ message.date|date:'c' }}" title="{{ message.date|date:'M j, Y, H:i T' }}">{{ message.date|date:"M j, H:i" }}</time></span>
     <span class="sender">{{ message.sender }}</span>
   </a>
   {% empty %}<p class="empty">No messages here.</p>{% endfor %}

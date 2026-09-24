@@ -4,12 +4,12 @@
 <section class="settings-page" data-editor>
   <a class="back quiet" href="/settings/" data-cancel>← Settings</a>
   <h1>Reclassify cached inbox</h1>
-  <p>Evaluate {{ message_count }} locally cached inbox messages using your current mail context, AI labels and descriptions. Unloaded messages, archived mail, spam, trash, and drafts are not selected.</p>
+  <p>Evaluate {{ message_count }} locally cached inbox messages using your current mail context, importance levels, AI labels and descriptions. Unloaded messages, archived mail, spam, trash, and drafts are not selected.</p>
   <p>New AI requests will be billed. Previous requests, including interrupted requests with unknown costs, stay in your usage history.</p>
   <p>Reset these AI-enabled labels: {% for label in labels %}<strong>{{ label.name }}</strong>{% if not forloop.last %}, {% endif %}{% empty %}none{% endfor %}.</p>
   <p>For each selected label, keep assignments justified by a current sender rule and remove the others, including manual assignments. AI may add a label again even if you previously removed it manually.</p>
-  <p>Unrelated labels, sender rules, notes, and usage history are unchanged. Messages with no matching labels are reconsidered too.</p>
-  <p>The background worker removes labels and refreshes their cached state before starting AI. If interrupted, the reset is retained for retry; removed labels may remain absent until reclassification finishes.</p>
+  <p>Unrelated labels, sender rules, notes, and usage history are unchanged. Importance is rescored even with no AI-enabled labels.</p>
+  <p>Confirmation resets labels for background reclassification. If the reset fails or is interrupted, confirm again. Removed labels may stay absent until classification finishes.</p>
   <form method="post" class="form-panel">
     {% csrf_token %}
     {% include "includes/form_fields.html" %}

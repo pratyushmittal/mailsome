@@ -22,6 +22,22 @@ class TabForm(forms.Form):
     )
     auto_classify = forms.BooleanField(required=False, label="Allow AI classification")
 
+    acceptance_threshold = forms.FloatField(
+        label="AI label acceptance threshold",
+        required=False,
+        initial=0.75,
+        min_value=0,
+        max_value=1,
+        widget=forms.NumberInput(attrs={"step": "0.01"}),
+        help_text="Apply this label when Jev's match probability meets this threshold (0 to 1).",
+    )
+
+    def clean_acceptance_threshold(self) -> float:
+        value = self.cleaned_data["acceptance_threshold"]
+        return (
+            self.initial.get("acceptance_threshold", 0.75) if value is None else value
+        )
+
     def clean_people(self) -> list[str]:
         people = [
             item.strip().casefold()

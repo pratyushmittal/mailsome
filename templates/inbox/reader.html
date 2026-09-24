@@ -50,9 +50,10 @@
     </div>
   </article>
   <aside class="sender-sidebar">
+    {% if message.importance != None %}<section aria-label="Importance"><h2>Importance</h2><p>{{ message.importance|floatformat:2 }}</p></section>{% endif %}
     <section class="message-labels" aria-label="Labels and decisions">
       {% for label in label_names %}<span>{{ label }}</span>{% endfor %}
-      {% for decision in reasons %}<p class="label-reasons"><strong>{{ decision.name }}</strong> · {{ decision.source }}{% if not decision.applied %} · pending{% endif %}<br>{{ decision.reason }}</p>{% endfor %}
+      {% for decision in reasons %}<p class="label-reasons"><strong>{{ decision.name }}</strong> · {{ decision.source }}{% if not decision.applied %} · pending{% endif %}<br>{% if decision.ai_score != None %}Match probability: {{ decision.ai_score|floatformat:2 }}{% else %}{{ decision.reason }}{% endif %}</p>{% endfor %}
     </section>
     <section class="sender-address"><strong>{{ message.sender_email }}</strong>{% if sender_note %}<p class="sender-note">{{ sender_note }}</p>{% endif %}</section>
     <nav class="sender-actions" aria-label="Message actions">

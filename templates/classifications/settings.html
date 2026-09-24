@@ -12,25 +12,25 @@
   </section>
   <form method="post" class="form-panel">
     {% csrf_token %}<h2>AI classification</h2>
-    <p class="muted">{{ model }} · Only enabled labels receive text from locally cached inbox messages. AI usage is billed to your OpenAI account.</p>
+    <p class="muted">{{ model }} · Stored inbox emails receive an importance score and any enabled labels. AI usage is billed to your TypeSafe account.</p>
     {% include "includes/form_fields.html" %}
     {% if has_key %}<p class="muted">An API key is saved privately.</p>{% endif %}
     <button type="submit">Save settings</button>
   </form>
+  <p><a href="/settings/importance/">Edit importance settings</a></p>
   <p><a href="/settings/reclassify/">Reclassify cached inbox</a></p>
   <section class="usage-panel">
     <div class="usage-heading"><h2>AI usage</h2><a href="/settings/">Refresh usage</a></div>
     <div class="usage-total"><strong>${{ usage.summary.total_usd|floatformat:5 }}</strong><span>Estimated USD · {{ usage.summary.request_count }} requests</span></div>
-    <p class="muted">Local estimate, not your OpenAI invoice. Only recorded requests are included. Cached tokens are counted once; reasoning is included in output tokens.</p>
+    <p class="muted">Local estimate, not your TypeSafe invoice. Only recorded requests are included. Jev charges for input tokens; output tokens are free.</p>
     {% if usage.summary.unknown_cost_count %}<p class="notice">{{ usage.summary.unknown_cost_count }} requests have unknown cost, excluded from the total.</p>{% endif %}
     {% if usage.summary.running_count %}<p class="muted">{{ usage.summary.running_count }} requests are running.</p>{% endif %}
     <details class="usage-history" open><summary>Request history</summary>
       {% for entry in usage.requests %}
       <article class="usage-entry">
         <div class="usage-line"><strong>{{ entry.status }}</strong><span>{% if entry.cost_usd != None %}${{ entry.cost_usd|floatformat:5 }}{% else %}Unknown cost{% endif %}</span></div>
-        <p>{{ entry.date|date:"M j, Y, H:i:s T" }} · {{ entry.model }} · {{ entry.reasoning }} · {{ entry.message_count }} emails{% if entry.duration != None %} · {{ entry.duration|floatformat:1 }}s{% endif %}</p>
-        <small>Input {{ entry.input_tokens|default_if_none:"Unknown" }} · Cached {{ entry.cached_tokens|default_if_none:"Unknown" }} · Cache write {{ entry.cache_write_tokens|default_if_none:"Unknown" }} · Output {{ entry.output_tokens|default_if_none:"Unknown" }} · Reasoning {{ entry.reasoning_tokens|default_if_none:"Unknown" }}</small>
-        {% if entry.response_id %}<small>{{ entry.response_id }}</small>{% endif %}
+        <p>{{ entry.date|date:"M j, Y, H:i:s T" }} · {{ entry.model }} · {{ entry.message_count }} emails{% if entry.duration != None %} · {{ entry.duration|floatformat:1 }}s{% endif %}</p>
+        <small>Input {{ entry.input_tokens|default_if_none:"Unknown" }} · Output {{ entry.output_tokens|default_if_none:"Unknown" }}</small>
       </article>
       {% empty %}<p>No AI requests recorded yet.</p>{% endfor %}
     </details>

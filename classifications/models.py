@@ -28,7 +28,8 @@ class LabelDecision(models.Model):
         help_text="Gmail label ID, not a local tab reference. Decisions survive unpinning a tab.",
     )
     source = models.CharField(max_length=16, choices=Source)
-    reason = models.TextField()
+    reason = models.TextField(default="", db_default="")
+    ai_score = models.FloatField(null=True)
     applied = models.BooleanField(
         default=False,
         db_default=False,
@@ -47,15 +48,10 @@ class AIRequest(models.Model):
     started_at = models.BigIntegerField()
     finished_at = models.BigIntegerField(null=True)
     model = models.TextField()
-    reasoning = models.TextField()
     message_count = models.IntegerField()
     status = models.CharField(max_length=20)
-    response_id = models.TextField(null=True)
     input_tokens = models.BigIntegerField(null=True)
-    cached_tokens = models.BigIntegerField(null=True)
-    cache_write_tokens = models.BigIntegerField(null=True)
     output_tokens = models.BigIntegerField(null=True)
-    reasoning_tokens = models.BigIntegerField(null=True)
     cost_usd = models.FloatField(null=True)
     pricing = models.JSONField(null=True)
     error_kind = models.CharField(max_length=60, null=True)

@@ -21,6 +21,7 @@ from collections.abc import Callable
 from django.conf import settings
 from django.core.exceptions import DisallowedHost
 from django.http import HttpRequest, HttpResponse
+from django.utils.log import log_response
 
 from mailsome.errors import APIError, error_response
 
@@ -34,7 +35,7 @@ class LocalSecurity:
             request.get_host()  # Enforce ALLOWED_HOSTS for HTML pages as well as static files.
         except DisallowedHost:
             return error_response(request, APIError(400, "Use localhost:8002."))
-        # The sole JSON endpoint is read-only and reserved for same-origin progress polling.
+        # The sole JSON endpoint is read-only and reserved for same-origin sync/classification polling.
         if request.path.startswith("/api/") and (
             request.headers.get("X-Mailsome-Request") != "1"
             or request.headers.get("Origin", settings.ORIGIN) != settings.ORIGIN
@@ -83,4 +84,13 @@ class LocalSecurity:
     def process_exception(
         self, request: HttpRequest, exception: Exception
     ) -> HttpResponse:
-        return error_response(request, exception)
+        response = error_response(request, exception)
+        log_response(
+            "%s: %s",
+            response.reason_phrase,
+            request.path,
+            response=response,
+            request=request,
+            exception=exception,
+        )
+        return response

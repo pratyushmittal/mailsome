@@ -4,5 +4,5 @@ from jobs import views
 
 urlpatterns = [
     path("refresh/", views.refresh, name="refresh"),
-    path("api/progress", views.progress, name="progress"),
+    path("api/sync", views.sync_status, name="sync_status"),
 ]

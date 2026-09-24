@@ -15,10 +15,9 @@ from google_auth_oauthlib.flow import Flow
 from accounts.forms import CredentialsForm
 from accounts.models import Account
 from inbox import gmail
-from jobs.runtime import mailbox_lock
-from jobs.tasks import enqueue
+from jobs.pipeline import sync_requested
 from mailsome.errors import APIError
-from mailsome.utilities import page
+from mailsome.utilities import atomic_write, page
 
 ORIGIN = settings.ORIGIN
 REDIRECT_URI = f"{ORIGIN}/auth/callback"
@@ -60,20 +59,17 @@ def upload_credentials(request: HttpRequest) -> HttpResponse:
     form = CredentialsForm(request.POST, request.FILES)
     status = 400
     if form.is_valid():
-        with mailbox_lock():
-            path = settings.DATA_DIR / "credentials.json"
-            # A stale setup tab must not overwrite a configured OAuth client.
-            if path.exists():
-                form.add_error(
-                    None,
-                    "OAuth credentials are already configured. Return to Connect Gmail; to replace them, remove the existing local credentials.json first.",
-                )
-                status = 409
-            else:
-                gmail.atomic_write(
-                    path, json.dumps({"web": form.cleaned_data["credentials"]})
-                )
-                return HttpResponseRedirect("/auth/connect", status=303)
+        path = settings.DATA_DIR / "credentials.json"
+        # A stale setup tab must not overwrite a configured OAuth client.
+        if path.exists():
+            form.add_error(
+                None,
+                "OAuth credentials are already configured. Return to Connect Gmail; to replace them, remove the existing local credentials.json first.",
+            )
+            status = 409
+        else:
+            atomic_write(path, json.dumps({"web": form.cleaned_data["credentials"]}))
+            return HttpResponseRedirect("/auth/connect", status=303)
     # File-size validation is distinct from invalid JSON or missing form fields.
     if any(
         error.code == "too_large"
@@ -102,39 +98,34 @@ def callback(request: HttpRequest) -> HttpResponse:
     if not request.GET.get("code") or not verifier:
         raise APIError(400, "Incomplete sign-in response. Start Connect Gmail again.")
 
-    with mailbox_lock():
-        flow = oauth_flow(state=expected, code_verifier=verifier)
-        # Passing the code directly keeps local HTTP out of oauthlib's token URL checks.
-        flow.fetch_token(code=request.GET["code"], timeout=30)
-        # Offline access is necessary for future refreshes after the access token expires.
-        if not flow.credentials.refresh_token:
-            raise APIError(
-                400,
-                "Google did not grant offline access. Reconnect Gmail and grant access.",
-            )
-        with gmail.service(flow.credentials) as client:
-            profile = gmail.get_profile(client)
-        account = Account.objects.filter(pk=1).first()
-        # Reconnecting another account must not overwrite this mailbox's token or preferences.
-        if account and account.email != profile["emailAddress"]:
-            raise APIError(
-                409,
-                "A different Gmail account is already connected. Reconnect that account.",
-            )
-        token = json.loads(flow.credentials.to_json())
-        # Granular consent can grant fewer scopes; the SDK accepts both OAuth text and parsed lists.
-        granted = flow.credentials.granted_scopes
-        if granted is not None:
-            token["scopes"] = (
-                granted.split() if isinstance(granted, str) else list(granted)
-            )
-        gmail.atomic_write(settings.DATA_DIR / "token.json", json.dumps(token))
-        Account.objects.get_or_create(
-            pk=1,
-            defaults={
-                "email": profile["emailAddress"],
-                "history_id": profile["historyId"],
-            },
+    flow = oauth_flow(state=expected, code_verifier=verifier)
+    # Passing the code directly keeps local HTTP out of oauthlib's token URL checks.
+    flow.fetch_token(code=request.GET["code"], timeout=30)
+    # Offline access is necessary for future refreshes after the access token expires.
+    if not flow.credentials.refresh_token:
+        raise APIError(400, "No refresh token received. Reconnect Gmail.")
+    with gmail.service(flow.credentials) as client:
+        profile = gmail.get_profile(client)
+    account = Account.objects.filter(pk=1).first()
+    # Reconnecting another account must not overwrite this mailbox's token or preferences.
+    if account and account.email != profile["emailAddress"]:
+        raise APIError(
+            409,
+            "A different Gmail account is already connected. Reconnect that account.",
         )
-    enqueue("sync", explicit=False)
+    token = json.loads(flow.credentials.to_json())
+    # Granular consent can grant fewer scopes; the SDK accepts both OAuth text and parsed lists.
+    granted = flow.credentials.granted_scopes
+    if granted is not None:
+        token["scopes"] = granted.split() if isinstance(granted, str) else list(granted)
+    atomic_write(settings.DATA_DIR / "token.json", json.dumps(token))
+    Account.objects.get_or_create(
+        pk=1,
+        defaults={
+            "email": profile["emailAddress"],
+            "history_id": profile["historyId"],
+        },
+    )
+    # Wake the Gmail worker to sync now rather than wait for its next interval.
+    sync_requested.set()
     return HttpResponseRedirect("/", status=303)
