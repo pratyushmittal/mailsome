@@ -384,6 +384,10 @@ def test_feed_j_k_scroll_to_mail_and_mark_the_mail_left_done(mail_keyboard):
         press('j'); press('j'); assert(c.classList.contains('focused'));
         timers.forEach(timer => timer.cleared || timer.callback());
         assert.deepEqual(requests.map(([url]) => url), ['/messages/a/done/', '/messages/b/done/', '/messages/c/done/']);
+        // After clicking a link inside an email, its frame has focus; k still moves through the feed.
+        const inside = {key: 'k', target: {}, preventDefault() { this.defaultPrevented = true; }};
+        c.querySelector('.email-frame').contentDocument.dispatch('keydown', inside);
+        assert(b.classList.contains('focused')); assert(inside.defaultPrevented);
     """)
 
 
@@ -537,7 +541,8 @@ def mail_keyboard():
                     // c is already read but still in the inbox, so it is archived too.
                     const item = new Element('article', {id: 'mail-' + id, class: 'feed-mail' + (id === 'c' ? '' : ' unread'), 'data-done-url': '/messages/' + id + '/done/'});
                     const frame = new Element('iframe', {class: 'email-frame', src: '/messages/' + id + '/body/', loading: 'lazy'});
-                    frame.contentDocument = {documentElement: {scrollHeight: 640}};
+                    frame.contentDocument = new Element('document');
+                    frame.contentDocument.documentElement = {scrollHeight: 640};
                     item.append(frame);
                     document.append(item);
                 }

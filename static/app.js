@@ -21,8 +21,8 @@
     document.querySelectorAll('[data-fragment]').forEach(loadFragment);
   }
 
-  // Grow an email frame to its content, again whenever the content reflows.
-  function fitFrame(frame) {
+  // Grow an email frame to its content, and let keys pressed inside it reach the app.
+  function fitFrame(frame, onFrameKey) {
     const page = frame.contentDocument?.documentElement;
     // Browsers hide documents they treat as cross-origin; such frames keep their CSS height.
     if (!page) return;
@@ -30,13 +30,26 @@
     fit();
     // Window resizes reflow the email after it loads.
     new ResizeObserver(fit).observe(page);
+    // Clicking a link focuses the frame. Adding the same listener twice is a no-op.
+    frame.contentDocument.addEventListener('keydown', onFrameKey);
+  }
+
+  // A key pressed inside an email acts as if pressed on its frame element.
+  function frameKeyEvent(event, frame) {
+    const {key, code, shiftKey, altKey, ctrlKey, metaKey, repeat, isComposing} = event;
+    return {
+      key, code, shiftKey, altKey, ctrlKey, metaKey, repeat, isComposing, target: frame,
+      get defaultPrevented() { return event.defaultPrevented; },
+      preventDefault: () => event.preventDefault(),
+    };
   }
 
   // The email may finish loading before this script runs, so fit now and on load.
-  function setupFrames() {
+  function setupFrames(handleKey) {
     document.querySelectorAll('.email-frame').forEach(frame => {
-      fitFrame(frame);
-      frame.addEventListener('load', () => fitFrame(frame));
+      const onFrameKey = event => handleKey(frameKeyEvent(event, frame));
+      fitFrame(frame, onFrameKey);
+      frame.addEventListener('load', () => fitFrame(frame, onFrameKey));
     });
   }
 
@@ -419,7 +432,6 @@
 
   function main() {
     loadFragments();
-    setupFrames();
     setupSearch();
     setupRows();
     restorePosition();
@@ -428,7 +440,9 @@
     setupFeed();
     setupTabDragging();
     const sequence = keySequence();
-    document.addEventListener('keydown', event => onKey(event, sequence));
+    const handleKey = event => onKey(event, sequence);
+    setupFrames(handleKey);
+    document.addEventListener('keydown', handleKey);
     startSyncPolling();
   }
 
