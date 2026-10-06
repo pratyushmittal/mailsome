@@ -180,63 +180,18 @@ def rich_body(payload: MessagePart) -> dict[str, Any]:
     }
 
 
-def _attribute(attributes: str, name: str) -> str:
-    """Read one attribute's value from a raw tag's attribute text, quoted or not."""
-    found = re.search(
-        rf"""(?<![\w-]){name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
-        attributes,
-        re.IGNORECASE,
-    )
-    return "".join(filter(None, found.groups())) if found else ""
-
-
-def _mark_hidden(html: str) -> str:
-    """Turn the email's own hiding into `hidden`; sanitizing drops display and <style>.
-
-    Hidden means inline display:none, or a class hidden by a top-level rule such as
-    `.hidden{display:none}`. An element's own inline display wins, as in CSS.
-    """
-    # Most emails never hide anything.
-    if not re.search(r"display\s*:\s*none", html, re.IGNORECASE):
-        return html
-    css = " ".join(
-        re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL | re.IGNORECASE)
-    )
-    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
-    # @media and similar blocks target other screens or features; keep top-level rules.
-    css = re.sub(r"@[^{;]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", css)
-    # Only plain `.class` selectors count; text before ";" is a stray @import.
-    hidden = {
-        match[1]
-        for selectors, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-        if re.search(r"display\s*:\s*none", declarations, re.IGNORECASE)
-        for selector in selectors.rsplit(";", 1)[-1].split(",")
-        if (match := re.fullmatch(r"\s*\.([\w-]+)\s*", selector))
-    }
-
-    def mark(tag: re.Match[str]) -> str:
-        inline = re.findall(
-            r"display\s*:\s*([\w-]+)", _attribute(tag[2], "style"), re.IGNORECASE
-        )
-        # The last inline display overrides class rules.
-        if inline:
-            hide = inline[-1].casefold() == "none"
-        else:
-            hide = bool(hidden.intersection(_attribute(tag[2], "class").split()))
-        return f"<{tag[1]} hidden{tag[2]}>" if hide else tag[0]
-
-    return re.sub(r"<([a-zA-Z][\w-]*)(\s[^>]*)>", mark, html)
-
-
 def formatted_html(
     body: dict[str, Any],
     text: str,
     load_part: Callable[[str], str],
     *,
     external: bool = False,
-    document: bool = True,
 ) -> str:
-    """Only allow inert formatting: no app selectors, controls, scripts, or positioned overlays."""
+    """A standalone document for a sandboxed frame: the email's own CSS, nothing active.
+
+    The frame isolates styles from the app; scripts, forms, embeds, and remote loads
+    are removed here and blocked again by the response's Content-Security-Policy.
+    """
     images: dict[str, str | None] = {}
     remaining = 8 * 1024 * 1024
 
@@ -330,7 +285,7 @@ def formatted_html(
             )
 
     clean = nh3.clean(
-        _mark_hidden(html),
+        html,
         tags={
             "a",
             "abbr",
@@ -362,6 +317,8 @@ def formatted_html(
             "p",
             "pre",
             "s",
+            # Email layouts depend on their own stylesheets; the frame keeps them contained.
+            "style",
             "small",
             "span",
             "strong",
@@ -378,7 +335,7 @@ def formatted_html(
         },
         clean_content_tags={
             "script",
-            "style",
+            "title",
             "iframe",
             "object",
             "embed",
@@ -389,7 +346,7 @@ def formatted_html(
             "noscript",
         },
         attributes={
-            "*": {"style", "title", "dir", "lang", "hidden"},
+            "*": {"style", "class", "id", "align", "title", "dir", "lang"},
             "a": {"href"},
             "img": {"src", "alt", "width", "height"},
             "table": {
@@ -415,52 +372,8 @@ def formatted_html(
         set_tag_attribute_values={"a": {"target": "_blank"}},
         url_schemes={"https", "http", "mailto", "cid", "data"},
         url_relative="deny",
-        filter_style_properties={
-            "color",
-            "background-color",
-            "font-family",
-            "font-size",
-            "font-weight",
-            "font-style",
-            "line-height",
-            "text-align",
-            "text-decoration",
-            "vertical-align",
-            "white-space",
-            "word-break",
-            "overflow-wrap",
-            "width",
-            "max-width",
-            "min-width",
-            "height",
-            "max-height",
-            # Emails clip preview text with these; display:none becomes `hidden`.
-            "overflow",
-            "visibility",
-            "margin",
-            "margin-top",
-            "margin-bottom",
-            "margin-left",
-            "margin-right",
-            "padding",
-            "padding-top",
-            "padding-bottom",
-            "padding-left",
-            "padding-right",
-            "border",
-            "border-width",
-            "border-style",
-            "border-color",
-            "border-radius",
-            "border-collapse",
-            "border-spacing",
-            "table-layout",
-        },
     )
     fragment = clean if html else "<pre>" + escape(text) + "</pre>"
-    # The enhanced reader embeds only this sanitized fragment, never the source email HTML.
-    if not document:
-        return fragment
     return (
         '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>body{margin:16px;color:#252821;background:white;font:15px/1.6 sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{white-space:pre-wrap}a{color:#28634e}</style></head><body>'
         + fragment

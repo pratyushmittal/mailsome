@@ -40,67 +40,34 @@ def test_sender_supplied_image_urls_are_blocked_even_after_opt_in(source) -> Non
     assert "src=" not in html and "srcset=" not in html
 
 
-def test_inline_email_cannot_impersonate_app_controls_or_escape_layout():
+def test_framed_email_keeps_its_own_styles_but_nothing_active():
     from inbox.content import formatted_html
 
     rendered = formatted_html(
         {
-            "html": '<div id="selected-message" class="sender-actions" data-archive name="x" tabindex="0" contenteditable="true" style="position:fixed;z-index:9999;transform:scale(10);display:contents;float:left"><a href="https://example.com" data-sender-note>Link</a><style>body{display:none}</style><form><input autofocus></form></div>'
+            "html": """<html><head><title>Digest</title>
+            <style>.date{font-size:64px} .hidden{display:none}</style></head>
+            <body><div class="date" id="day" style="display:flex">12</div>
+            <script>alert(1)</script><form><input autofocus></form><iframe></iframe>
+            <a href="/settings/">Relative</a><a href="https://example.com">Link</a></body></html>"""
         },
         "",
         MagicMock(),
-        document=False,
     )
+    # Layouts depend on their own stylesheets, classes, and display values.
+    assert "<style>.date{font-size:64px} .hidden{display:none}</style>" in rendered
+    assert '<div class="date" id="day" style="display:flex">12</div>' in rendered
+    # Titles would show as stray text; active content and app-relative links go.
+    assert "Digest" not in rendered and "Link" in rendered
     for forbidden in (
-        "id=",
-        "class=",
-        "data-",
-        "name=",
-        "tabindex=",
-        "contenteditable",
-        "position",
-        "z-index",
-        "transform",
-        "display:",
-        "float:",
-        "<style",
+        "<script",
         "<form",
         "<input",
         "autofocus",
-        "<html",
+        "<iframe",
+        "/settings/",
     ):
         assert forbidden not in rendered
-    assert "Link" in rendered
-
-
-def test_email_hiding_survives_sanitizing_without_other_display_changes():
-    from inbox.content import formatted_html
-
-    rendered = formatted_html(
-        {
-            "html": """<style>/* .note{display:none} */ .hidden, .x .y {display:none}
-            @media (max-width: 600px) { .wide {display:none} }</style>
-            <div style="display:none;max-height:0;overflow:hidden">Preview</div>
-            <div style="color:red; display: none">Spaced</div>
-            <div class="box hidden" style="margin:4px">Upgrade your client</div>
-            <p class="hidden" style="display:block">Shown</p>
-            <p class=wide>Wide</p><p class="note" data-class="hidden">Note</p>
-            <span style="display:block">Block</span>"""
-        },
-        "",
-        MagicMock(),
-        document=False,
-    )
-    # Inline preview text and top-level class rules stay hidden.
-    assert '<div hidden="" style="max-height:0;overflow:hidden">' in rendered
-    assert '<div hidden="" style="color:red">' in rendered
-    assert '<div hidden="" style="margin:4px">' in rendered
-    # An element's own inline display overrides class rules, as in CSS.
-    assert '<p style="">Shown</p>' in rendered
-    # Media queries, comments, and attributes merely containing "class" hide nothing.
-    assert "<p>Wide</p>" in rendered and "<p>Note</p>" in rendered
-    # Other display values could restructure the page layout.
-    assert "display:" not in rendered and "Block" in rendered
 
 
 def test_attachment_count_handles_nested_files_and_ignores_inline_logos():

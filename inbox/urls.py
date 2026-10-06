@@ -25,7 +25,7 @@ urlpatterns = [
     ),
     path("messages/<str:message_id>/body/", views.message_body, name="message_body"),
     path("messages/<str:message_id>/archive/", views.archive, name="archive"),
-    path("messages/<str:message_id>/read/", views.mark_read, name="mark_read"),
+    path("messages/<str:message_id>/done/", views.mark_done, name="mark_done"),
     path("messages/<str:message_id>/reply/", views.compose, name="reply"),
     path(
         "messages/<str:message_id>/unsubscribe/", views.unsubscribe, name="unsubscribe"

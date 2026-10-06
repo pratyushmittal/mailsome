@@ -12,12 +12,12 @@
 {% if selected_tab.feed and not query %}
 <div class="feed" data-feed>
   {% for message in messages %}
-  <article class="feed-mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" data-read-url="{% url 'mark_read' message.id %}">
+  <article class="feed-mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" data-done-url="{% url 'mark_done' message.id %}">
     <header class="feed-heading">
       <a class="subject" href="{{ message.url }}">{{ message.subject|default:"(No subject)" }}</a>{% include "includes/attachment_badge.html" with count=message.attachment_count %}{% if message.importance > importance_threshold %}<span class="importance-badge">Important</span>{% endif %}
       <span class="sender">{{ message.sender }} · <time datetime="{{ message.date|date:'c' }}">{{ message.date|date:"M j, H:i" }}</time></span>
     </header>
-    <div class="email-html" data-fragment="{% url 'message_body' message.id %}?fragment=1" data-lazy aria-busy="true"><a href="{% url 'message_body' message.id %}">Open formatted body</a></div>
+    <iframe class="email-frame" src="{% url 'message_body' message.id %}" loading="lazy" title="Formatted message"></iframe>
   </article>
   {% empty %}<p class="empty">No messages here.</p>{% endfor %}
 </div>

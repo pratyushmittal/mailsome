@@ -31,7 +31,7 @@ class Tab(models.Model):
     feed = models.BooleanField(
         default=False,
         db_default=False,
-        help_text="Show full emails one after another, marking each read as it is scrolled into focus.",
+        help_text="Show full emails one after another; each is marked read and archived once seen.",
     )
     position = models.IntegerField(default=0, db_default=0)
 

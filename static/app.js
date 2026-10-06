@@ -1,6 +1,6 @@
 // Django owns page data and forms. These helpers only enhance the rendered HTML.
 (() => {
-  // These endpoints return escaped Django templates or nh3-sanitized email fragments only.
+  // These endpoints return escaped Django templates only; email bodies render in frames.
   // Fetch once per page; no extra reader state, and normal links work without JavaScript.
   function loadFragment(target) {
     fetch(target.dataset.fragment, {signal: AbortSignal.timeout(30000)})
@@ -17,17 +17,26 @@
       .finally(() => target.setAttribute('aria-busy', 'false'));
   }
 
-  // Feed bodies load about a screen before they scroll into view; other fragments load at once.
   function loadFragments() {
-    const lazy = new IntersectionObserver(entries => entries.forEach(entry => {
-      // Observers also report elements leaving the margin; load only on approach.
-      if (!entry.isIntersecting) return;
-      lazy.unobserve(entry.target);
-      loadFragment(entry.target);
-    }), {rootMargin: '100% 0px'});
-    document.querySelectorAll('[data-fragment]').forEach(target => {
-      if ('lazy' in target.dataset) lazy.observe(target);
-      else loadFragment(target);
+    document.querySelectorAll('[data-fragment]').forEach(loadFragment);
+  }
+
+  // Grow an email frame to its content, again whenever the content reflows.
+  function fitFrame(frame) {
+    const page = frame.contentDocument?.documentElement;
+    // Browsers hide documents they treat as cross-origin; such frames keep their CSS height.
+    if (!page) return;
+    const fit = () => { frame.style.height = page.scrollHeight + 'px'; };
+    fit();
+    // Window resizes reflow the email after it loads.
+    new ResizeObserver(fit).observe(page);
+  }
+
+  // The email may finish loading before this script runs, so fit now and on load.
+  function setupFrames() {
+    document.querySelectorAll('.email-frame').forEach(frame => {
+      fitFrame(frame);
+      frame.addEventListener('load', () => fitFrame(frame));
     });
   }
 
@@ -138,28 +147,33 @@
     dialog.querySelector('[data-cancel]').addEventListener('click', event => { event.preventDefault(); dialog.close(); });
   }
 
-  // Mark one feed email read in Gmail; a failed request leaves it unread for the next focus.
-  function markRead(item) {
-    // Already-read mail, or a request in flight, needs no write.
-    if (!item.classList.contains('unread')) return;
+  // Mark one feed email read and archive it in Gmail; a failed request retries on its next focus.
+  function markDone(item) {
+    // Archived mail, or a request in flight, needs no write.
+    if (item.classList.contains('done')) return;
+    const unread = item.classList.contains('unread');
+    item.classList.add('done');
     item.classList.remove('unread');
-    fetch(item.dataset.readUrl, {
+    fetch(item.dataset.doneUrl, {
       method: 'POST',
       headers: {'X-CSRFToken': document.querySelector('[name="csrfmiddlewaretoken"]').value},
     })
-      .then(response => { if (!response.ok) throw new Error('Not marked read'); })
-      .catch(() => item.classList.add('unread'));
+      .then(response => { if (!response.ok) throw new Error('Not marked done'); })
+      .catch(() => {
+        item.classList.remove('done');
+        if (unread) item.classList.add('unread');
+      });
   }
 
-  // The focused feed email is marked read after a second, so fast scrolling marks nothing.
+  // The focused feed email is marked done after a second, so fast scrolling marks nothing.
   function focusFeedMail(item) {
     const previous = document.querySelector('.feed-mail.focused');
     // Scrolling reports an email again as it settles; keep its running timer.
     if (previous === item) return;
     previous?.classList.remove('focused');
-    clearTimeout(previous?.readTimer);
+    clearTimeout(previous?.doneTimer);
     item.classList.add('focused');
-    item.readTimer = setTimeout(() => markRead(item), 1000);
+    item.doneTimer = setTimeout(() => markDone(item), 1000);
   }
 
   // The feed email crossing a reading line a third down the screen is in focus.
@@ -315,8 +329,8 @@
     event.preventDefault();
     const current = document.querySelector('.feed-mail.focused');
     const next = neighbour(items, current, event.key);
-    // Moving on with j/k marks the email left read without waiting.
-    if (current && next !== current) markRead(current);
+    // Moving on with j/k marks the email left done without waiting.
+    if (current && next !== current) markDone(current);
     focusFeedMail(next);
     next.scrollIntoView({block: 'start', behavior: 'smooth'});
     return true;
@@ -405,6 +419,7 @@
 
   function main() {
     loadFragments();
+    setupFrames();
     setupSearch();
     setupRows();
     restorePosition();

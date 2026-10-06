@@ -555,7 +555,6 @@ def message(request: HttpRequest, message_id: str) -> HttpResponse:
                 {
                     "remote": request.GET.get("remote", ""),
                     "images": request.GET.get("images", ""),
-                    "fragment": "1",
                 }
             ),
             "attachments_url": f"/messages/{message_id}/attachments/?"
@@ -757,7 +756,7 @@ def message_history(request: HttpRequest, message_id: str) -> HttpResponse:
 
 @require_http_methods(["GET"])
 def message_body(request: HttpRequest, message_id: str) -> HttpResponse:
-    """Sanitized fragment for the reader, or a sandboxed standalone fallback without JavaScript."""
+    """The sanitized email as a sandboxed document, framed by the reader and feed."""
 
     def load_part(attachment_id: str) -> str:
         # Only MIME-linked body/image IDs reach this loader, never external URLs or documents.
@@ -778,17 +777,17 @@ def message_body(request: HttpRequest, message_id: str) -> HttpResponse:
                 item.body or "",
                 load_part,
                 external=external,
-                document=request.GET.get("fragment") != "1",
             )
         )
     except (APIError, HttpError, RefreshError, OSError) as error:
-        # Standalone fallback navigations retain isolation headers even on provider failure.
+        # Failures keep the isolation headers too.
         response = HttpResponse(
             "Formatted email is unavailable. Choose Plain text above, or reload to retry.",
             status=error.status_code if isinstance(error, APIError) else 502,
         )
+    # Without scripts, same-origin only lets the app measure the frame's height.
     response["Content-Security-Policy"] = (
-        "sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; "
+        "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox; default-src 'none'; "
         "script-src 'none'; style-src 'unsafe-inline'; img-src data:"
         + (" https:" if external else "")
         + "; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
@@ -881,11 +880,12 @@ def sender_edit(request: HttpRequest) -> HttpResponse:
 
 
 @require_http_methods(["POST"])
-def mark_read(request: HttpRequest, message_id: str) -> HttpResponse:
-    """Feed tabs mark mail read as it scrolls into focus; sync refreshes cached labels."""
+def mark_done(request: HttpRequest, message_id: str) -> HttpResponse:
+    """Feed tabs mark mail read and archive it once seen; sync refreshes cached labels."""
     require_label_access()
     with gmail.service() as client:
-        gmail.remove_label_from_message(client, message_id, "UNREAD")
+        # Only the seen message; the rest of its conversation stays in the inbox.
+        gmail.remove_labels_from_message(client, message_id, ["UNREAD", "INBOX"])
     sync_requested.set()
     return HttpResponse(status=204)
 

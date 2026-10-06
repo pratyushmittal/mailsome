@@ -27,7 +27,7 @@ class TabForm(forms.Form):
     feed = forms.BooleanField(
         required=False,
         label="Open as a feed",
-        help_text="Show full emails one after another. Each email is marked read after it stays in focus for a second.",
+        help_text="Show full emails one after another. Each email is marked read and archived after it stays in focus for a second.",
     )
 
     acceptance_threshold = forms.FloatField(

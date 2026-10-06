@@ -219,6 +219,8 @@ def mail_with_images_and_tracker(client, tmp_path, api):
 def opened_formatted_email(client):
     reader = client.get("/messages/a/")
     assert reader.status_code == 200 and "Load external images" in reader.text
+    # The reader may frame only the app's own sandboxed body documents.
+    assert "frame-src 'self'" in reader.headers["Content-Security-Policy"]
     rendered = client.get(reader.context["body_url"])
     return rendered
 
@@ -231,8 +233,12 @@ def verify_default_image_policy(api, opened_formatted_email):
     assert rendered.status_code == 200
     assert "Welcome" in rendered.text and "<script" not in rendered.text
     assert "data:image/png;base64," + INLINE_PNG in rendered.text
-    assert "tracker.example" not in rendered.text
-    assert "img-src data:;" in rendered.headers["Content-Security-Policy"]
+    assert 'src="https://tracker.example' not in rendered.text
+    # The email's own CSS may name trackers; the frame's policy blocks those loads.
+    policy = rendered.headers["Content-Security-Policy"]
+    assert "default-src 'none'" in policy and "img-src data:;" in policy
+    # Without scripts, same-origin only lets the app size the frame.
+    assert "allow-same-origin" in policy and "allow-scripts" not in policy
     api.messages.return_value.attachments.return_value.get.assert_called_once_with(
         userId="me", messageId="a", id="logo-attachment"
     )
@@ -266,7 +272,7 @@ def formatted_view_without_consent(client):
 @then("external images are blocked again")
 def verify_blocked_external_image(formatted_view_without_consent):
     blocked = formatted_view_without_consent
-    assert "tracker.example" not in blocked.text
+    assert 'src="https://tracker.example' not in blocked.text
     assert "img-src data:;" in blocked.headers["Content-Security-Policy"]
 
 
@@ -340,39 +346,44 @@ def mail_navigation(mail_keyboard):
     """)
 
 
-def test_feed_loads_bodies_on_approach_and_marks_focused_mail_read(mail_keyboard):
+def test_feed_fits_email_frames_and_marks_focused_mail_done(mail_keyboard):
     mail_keyboard("""
         boot({feed: true});
-        const [lazy, reading] = observers, [a, b] = document.querySelectorAll('.feed-mail');
-        // Bodies load only as they approach the viewport.
+        const [reading] = observers, [a, b] = document.querySelectorAll('.feed-mail');
+        // Email frames grow to their content, and again when it reflows.
+        const frame = a.querySelector('.email-frame'), page = frame.contentDocument.documentElement;
+        assert.equal(frame.style.height, '640px');
+        page.scrollHeight = 900; page.resized(); assert.equal(frame.style.height, '900px');
         assert.equal(requests.length, 0);
-        lazy.cross(a.querySelector('[data-fragment]'));
-        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/body/?fragment=1']);
-        // Scrolling quickly past a marks nothing; b stays in focus for a second and is marked read.
+        // Scrolling quickly past a marks nothing; b stays in focus for a second and is marked done.
         reading.cross(a); assert(a.classList.contains('focused'));
         reading.cross(b); assert(!a.classList.contains('focused')); assert(b.classList.contains('focused'));
         assert.deepEqual(timers.filter(timer => !timer.cleared).map(timer => timer.delay), [1000]);
         timers.forEach(timer => timer.cleared || timer.callback());
-        assert(a.classList.contains('unread')); assert(!b.classList.contains('unread'));
-        assert.deepEqual(requests.at(-1), ['/messages/b/read/', {method: 'POST', headers: {'X-CSRFToken': 'token'}}]);
-        // This harness fails requests; a failed write leaves the email unread for its next focus.
-        setImmediate(() => assert(b.classList.contains('unread')));
+        assert(a.classList.contains('unread')); assert(!b.classList.contains('unread')); assert(b.classList.contains('done'));
+        assert.deepEqual(requests.at(-1), ['/messages/b/done/', {method: 'POST', headers: {'X-CSRFToken': 'token'}}]);
+        // This harness fails requests; a failed write restores the email for its next focus.
+        setImmediate(() => { assert(b.classList.contains('unread')); assert(!b.classList.contains('done')); });
     """)
 
 
-def test_feed_j_k_scroll_to_mail_and_mark_the_mail_left_read(mail_keyboard):
+def test_feed_j_k_scroll_to_mail_and_mark_the_mail_left_done(mail_keyboard):
     mail_keyboard("""
         boot({feed: true});
-        const [a, b] = document.querySelectorAll('.feed-mail');
+        const [a, b, c] = document.querySelectorAll('.feed-mail');
         press('j'); assert(a.classList.contains('focused')); assert(a.scrolled);
         assert.equal(requests.length, 0);
-        // Leaving a with j marks it read at once; its pending timer no longer matters.
+        // Leaving a with j marks it done at once; its pending timer no longer matters.
         press('j'); assert(b.classList.contains('focused')); assert(!a.classList.contains('focused'));
-        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/read/']);
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/done/']);
         assert(timers[0].cleared);
-        // k moves back and marks b read the same way.
+        // k moves back and marks b done the same way.
         press('k'); assert(a.classList.contains('focused'));
-        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/read/', '/messages/b/read/']);
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/done/', '/messages/b/done/']);
+        // Finished writes are not repeated; already-read c is archived after a second in focus.
+        press('j'); press('j'); assert(c.classList.contains('focused'));
+        timers.forEach(timer => timer.cleared || timer.callback());
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/done/', '/messages/b/done/', '/messages/c/done/']);
     """)
 
 
@@ -440,7 +451,7 @@ def mail_keyboard():
         class Element {
             constructor(tag = 'div', attrs = {}) {
                 this.tagName = tag.toUpperCase(); this.attrs = attrs; this.children = [];
-                this.listeners = {}; this.hidden = false; this.dataset = {};
+                this.listeners = {}; this.hidden = false; this.dataset = {}; this.style = {};
                 this.value = attrs.value || ''; this.id = attrs.id || '';
                 this.classes = new Set((attrs.class || '').split(' ').filter(Boolean));
                 this.classList = {add: name => this.classes.add(name), remove: name => this.classes.delete(name), contains: name => this.classes.has(name)};
@@ -492,6 +503,11 @@ def mail_keyboard():
             unobserve(target) { this.targets.delete(target); }
             cross(target, isIntersecting = true) { if (this.targets.has(target)) this.callback([{target, isIntersecting}]); }
         };
+        // Tests call target.resized() as a browser would after a reflow.
+        global.ResizeObserver = class {
+            constructor(callback) { this.callback = callback; }
+            observe(target) { target.resized = this.callback; }
+        };
         global.sessionStorage = {setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) || null};
         // Record requests and fail them like an offline browser; tests assert which were made.
         global.fetch = (...args) => { requests.push(args); return Promise.reject(Error('Offline test harness')); };
@@ -518,8 +534,11 @@ def mail_keyboard():
             if (feed) {
                 document.append(new Element('input', {name: 'csrfmiddlewaretoken', value: 'token'}));
                 for (const id of ids) {
-                    const item = new Element('article', {id: 'mail-' + id, class: 'feed-mail unread', 'data-read-url': '/messages/' + id + '/read/'});
-                    item.append(new Element('div', {'data-fragment': '/messages/' + id + '/body/?fragment=1', 'data-lazy': ''}));
+                    // c is already read but still in the inbox, so it is archived too.
+                    const item = new Element('article', {id: 'mail-' + id, class: 'feed-mail' + (id === 'c' ? '' : ' unread'), 'data-done-url': '/messages/' + id + '/done/'});
+                    const frame = new Element('iframe', {class: 'email-frame', src: '/messages/' + id + '/body/', loading: 'lazy'});
+                    frame.contentDocument = {documentElement: {scrollHeight: 640}};
+                    item.append(frame);
                     document.append(item);
                 }
             }

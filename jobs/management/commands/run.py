@@ -27,4 +27,10 @@ class Command(BaseCommand):
             port=8002,
             access_log=True,
             lifespan="on",
+            # Restart the server and its workers when code or cached templates change.
+            # Static files are served fresh, so their edits need only a page reload.
+            reload=True,
+            reload_includes=["*.py", "*.html"],
+            # Uvicorn matches excluded folders against absolute paths.
+            reload_excludes=[str(settings.BASE_DIR / "tests")],
         )

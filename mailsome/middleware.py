@@ -67,8 +67,7 @@ class LocalSecurity:
                 response.setdefault(name, value)
             else:
                 response[name] = value
-        # Inline email loses the iframe boundary: only our local script can execute.
-        # Sanitization additionally strips classes/IDs/data attributes and all active elements.
+        # Only our local script executes; email bodies load in same-origin sandboxed frames.
         response.setdefault(
             "Content-Security-Policy",
             (
@@ -76,7 +75,7 @@ class LocalSecurity:
                 "img-src 'self' data:"
                 + (" https:" if request.GET.get("images") == "1" else "")
                 + "; "
-                "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+                "object-src 'none'; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             ),
         )
         return response

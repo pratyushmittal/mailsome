@@ -27,8 +27,9 @@ just test                 # Or: just test -k search
 uv run pre-commit run --all-files
 ```
 
-Open `http://localhost:8002`. Ctrl+C stops the server and both workers. There is no hot reload;
-restart after code changes. Run `uv lock` after changing dependencies.
+Open `http://localhost:8002`. Ctrl+C stops the server and both workers. Python and template
+edits restart both automatically (after any active pass finishes); reload the page for JS/CSS.
+Restart `just run` to apply new migrations. Run `uv lock` after changing dependencies.
 `just run` prints request logs and local error tracebacks; browser errors stay sanitized.
 
 BDD scenarios belong in `tests/features/`, with bindings in `tests/test_*.py`.
@@ -49,7 +50,8 @@ Tests use fake providers and temporary databases, not your mailbox.
   the next mail in the list, so moving on or archiving with `d` opens it quickly.
 - **Feed tabs:** enable **Open as a feed** on a label to read its inbox mail as one
   scrolling page of full emails. Bodies load as you approach them. The email at the
-  reading line has a blue outline and is marked read after a second in focus.
+  reading line has a blue outline and is marked read and archived after a second in
+  focus.
 - **Labels:** sender rules and AI write labels to Gmail. History sync picks up
   those changes; the local display may briefly lag behind a successful write.
 - **Storage:** downloaded mail stays in `data/mailsome.sqlite3`, including older
@@ -127,7 +129,7 @@ On Settings or the context editor, it focuses the existing field without discard
 | Inbox/reader | `/` | Open search |
 | Inbox/reader | `c` | Compose a new email |
 | Mail list | `j` / `k`, `Enter` | Select next/previous mail, then open |
-| Feed tab | `j` / `k` | Scroll to the next/previous email; mark the one you leave read |
+| Feed tab | `j` / `k` | Scroll to the next/previous email; mark the one you leave read and archive it |
 | Reader | `Escape` | Return to the list and restore position |
 | Reader | `d` | Archive the entire thread and open the next mail in the list; do not mark it read |
 | Reader | `r` | Reply to all inline; `Escape` closes the reply and keeps the draft |

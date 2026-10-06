@@ -27,10 +27,7 @@
     </nav>
     {% endif %}
     {% if formatted %}
-      <div class="email-html" data-fragment="{{ body_url }}" aria-busy="true">
-        <p class="quiet">Loading formatted message… <a href="{{ body_url }}">Open formatted body</a></p>
-        <pre class="message-body">{{ message.body }}</pre>
-      </div>
+      <iframe class="email-frame" src="{{ body_url }}" title="Formatted message"></iframe>
     {% else %}
       <pre class="message-body">{{ message.body }}</pre>
     {% endif %}
