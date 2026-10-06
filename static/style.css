@@ -183,6 +183,12 @@ a.tab, .add-tab { text-decoration: none; }
 @media (max-width: 600px) { .thread-summary { flex-direction: column; gap: 6px; } .thread-summary > span:last-child { text-align: left; } }
 
 /* Email styles stay inside a clipped formatting context, never over application controls. */
+/* Feed padding lets the last email reach the reading line. */
+.feed { padding-bottom: 70vh; }
+.feed-mail { margin: 18px 0; padding: 16px 18px; background: #fffdfb; border: 1px solid #f0e9e2; border-radius: 12px; scroll-margin-top: 30vh; }
+.feed-mail.focused { outline: 2px solid #2f6fed; outline-offset: 2px; }
+.feed-heading { display: grid; gap: 4px; margin-bottom: 12px; }
+.feed-heading .sender { color: #776f7f; font-size: 12px; }
 .email-html { contain: content; isolation: isolate; overflow: auto; max-width: 100%; padding: 16px; background: white; color: #252821; font: 15px/1.6 sans-serif; overflow-wrap: anywhere; }
 .email-html img { max-width: 100%; height: auto; }
 .email-html pre { white-space: pre-wrap; }

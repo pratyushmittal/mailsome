@@ -64,6 +64,7 @@ def page(
             "id": tab.pk,
             "name": tab.name,
             "tone": tab.pk % 6,
+            "feed": tab.feed,
             "url": "/?" + urlencode({"tab": tab.pk}),
         }
         for tab in Tab.objects.all()

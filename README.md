@@ -47,6 +47,9 @@ Tests use fake providers and temporary databases, not your mailbox.
   save current labels, headers, text, and formatted content. Attachments download
   only when requested. Opening mail does not mark it read. The reader preloads
   the next mail in the list, so moving on or archiving with `d` opens it quickly.
+- **Feed tabs:** enable **Open as a feed** on a label to read its inbox mail as one
+  scrolling page of full emails. Bodies load as you approach them. The email at the
+  reading line has a blue outline and is marked read after a second in focus.
 - **Labels:** sender rules and AI write labels to Gmail. History sync picks up
   those changes; the local display may briefly lag behind a successful write.
 - **Storage:** downloaded mail stays in `data/mailsome.sqlite3`, including older
@@ -124,6 +127,7 @@ On Settings or the context editor, it focuses the existing field without discard
 | Inbox/reader | `/` | Open search |
 | Inbox/reader | `c` | Compose a new email |
 | Mail list | `j` / `k`, `Enter` | Select next/previous mail, then open |
+| Feed tab | `j` / `k` | Scroll to the next/previous email; mark the one you leave read |
 | Reader | `Escape` | Return to the list and restore position |
 | Reader | `d` | Archive the entire thread and open the next mail in the list; do not mark it read |
 | Reader | `r` | Reply to all inline; `Escape` closes the reply and keeps the draft |

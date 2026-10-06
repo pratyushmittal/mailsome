@@ -39,6 +39,7 @@ from inbox import gmail
 from inbox import views as app
 from inbox.models import Message, Tab
 from inbox.utils import apply_message_update
+from jobs import pipeline
 
 api = api_fixture
 client = client_fixture
@@ -1231,3 +1232,29 @@ def test_failed_send_keeps_the_draft(client, tmp_path, api, failure):
     assert response.status_code == (400 if failure == "invalid address" else 502)
     assert "Draft text" in response.text
     assert api.messages.return_value.send.called == (failure == "gmail")
+
+
+def test_feed_tab_shows_full_mail_and_marks_focused_mail_read(client, tmp_path, api):
+    synced(client, tmp_path, api)
+    assert (
+        client.post("/tabs/new/", {"name": "Humans", "feed": "on"}).status_code == 303
+    )
+    tab = Tab.objects.get(name="Humans")
+    assert tab.feed
+    api.mailbox["a"]["labelIds"] = ["INBOX", "UNREAD", tab.label_id]
+    apply_message_update(api.mailbox["a"])
+
+    # Feed tabs render each email with a lazily loaded body; searches stay ordinary lists.
+    feed = client.get(f"/?tab={tab.pk}").text
+    assert 'class="feed-mail unread" id="mail-a"' in feed
+    assert 'data-fragment="/messages/a/body/?fragment=1" data-lazy' in feed
+    assert "data-feed" not in client.get(f"/?tab={tab.pk}&q=hello").text
+
+    # Marking read removes UNREAD in Gmail and leaves cached labels to sync.
+    pipeline.sync_requested.clear()
+    assert client.post("/messages/a/read/").status_code == 204
+    api.messages.return_value.modify.assert_called_with(
+        userId="me", id="a", body={"removeLabelIds": ["UNREAD"]}
+    )
+    assert pipeline.sync_requested.is_set()
+    assert "UNREAD" in Message.objects.get(pk="a").labels

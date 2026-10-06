@@ -24,6 +24,11 @@ class TabForm(forms.Form):
         help_text="Full sender email addresses, separated by commas or new lines. Maximum 100. Gmail's native sender matching labels new arrivals, even when Mailsome is closed. Adding a sender also applies this label within the latest 1,000 inbox emails. Removing one only stops future assignments.",
     )
     auto_classify = forms.BooleanField(required=False, label="Allow AI classification")
+    feed = forms.BooleanField(
+        required=False,
+        label="Open as a feed",
+        help_text="Show full emails one after another. Each email is marked read after it stays in focus for a second.",
+    )
 
     acceptance_threshold = forms.FloatField(
         label="AI label acceptance threshold",

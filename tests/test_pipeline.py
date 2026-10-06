@@ -606,6 +606,7 @@ const context = {
   window: {addEventListener: () => {}},
   location: {hash: '', pathname: '/', search: ''},
   setTimeout: (callback, interval) => scheduled.push({callback, interval}),
+  IntersectionObserver: class { observe() {} },
   AbortSignal: {timeout: () => null},
   fetch: async (url) => {
     requests.push(url);

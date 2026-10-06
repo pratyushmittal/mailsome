@@ -334,6 +334,7 @@ def tab_edit(request: HttpRequest, tab_id: int | None = None) -> HttpResponse:
             "people": "\n".join(tab.people),
             "auto_classify": tab.auto_classify,
             "acceptance_threshold": tab.acceptance_threshold,
+            "feed": tab.feed,
         }
         if tab
         else {}
@@ -877,6 +878,16 @@ def sender_edit(request: HttpRequest) -> HttpResponse:
         },
         status=status,
     )
+
+
+@require_http_methods(["POST"])
+def mark_read(request: HttpRequest, message_id: str) -> HttpResponse:
+    """Feed tabs mark mail read as it scrolls into focus; sync refreshes cached labels."""
+    require_label_access()
+    with gmail.service() as client:
+        gmail.remove_label_from_message(client, message_id, "UNREAD")
+    sync_requested.set()
+    return HttpResponse(status=204)
 
 
 @require_http_methods(["POST"])

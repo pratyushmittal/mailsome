@@ -28,6 +28,11 @@ class Tab(models.Model):
     people = models.JSONField(default=list, db_default=[])
     auto_classify = models.BooleanField(default=False, db_default=False)
     acceptance_threshold = models.FloatField(default=0.75, db_default=0.75)
+    feed = models.BooleanField(
+        default=False,
+        db_default=False,
+        help_text="Show full emails one after another, marking each read as it is scrolled into focus.",
+    )
     position = models.IntegerField(default=0, db_default=0)
 
     class Meta:

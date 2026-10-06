@@ -73,6 +73,36 @@ def test_inline_email_cannot_impersonate_app_controls_or_escape_layout():
     assert "Link" in rendered
 
 
+def test_email_hiding_survives_sanitizing_without_other_display_changes():
+    from inbox.content import formatted_html
+
+    rendered = formatted_html(
+        {
+            "html": """<style>/* .note{display:none} */ .hidden, .x .y {display:none}
+            @media (max-width: 600px) { .wide {display:none} }</style>
+            <div style="display:none;max-height:0;overflow:hidden">Preview</div>
+            <div style="color:red; display: none">Spaced</div>
+            <div class="box hidden" style="margin:4px">Upgrade your client</div>
+            <p class="hidden" style="display:block">Shown</p>
+            <p class=wide>Wide</p><p class="note" data-class="hidden">Note</p>
+            <span style="display:block">Block</span>"""
+        },
+        "",
+        MagicMock(),
+        document=False,
+    )
+    # Inline preview text and top-level class rules stay hidden.
+    assert '<div hidden="" style="max-height:0;overflow:hidden">' in rendered
+    assert '<div hidden="" style="color:red">' in rendered
+    assert '<div hidden="" style="margin:4px">' in rendered
+    # An element's own inline display overrides class rules, as in CSS.
+    assert '<p style="">Shown</p>' in rendered
+    # Media queries, comments, and attributes merely containing "class" hide nothing.
+    assert "<p>Wide</p>" in rendered and "<p>Note</p>" in rendered
+    # Other display values could restructure the page layout.
+    assert "display:" not in rendered and "Block" in rendered
+
+
 def test_attachment_count_handles_nested_files_and_ignores_inline_logos():
     from inbox.content import attachment_count
 

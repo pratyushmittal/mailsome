@@ -443,6 +443,15 @@ def add_label_to_message(
     )
 
 
+def remove_label_from_message(
+    client: GmailResource, message_id: str, label_id: str
+) -> None:
+    """Remove one label from one message: 5 quota units, unlike a 50-unit batch."""
+    client.users().messages().modify(
+        userId="me", id=message_id, body={"removeLabelIds": [label_id]}
+    ).execute(num_retries=2)
+
+
 def add_label_to_messages(
     client: GmailResource, message_ids: list[str], label_id: str
 ) -> None:

@@ -180,6 +180,54 @@ def rich_body(payload: MessagePart) -> dict[str, Any]:
     }
 
 
+def _attribute(attributes: str, name: str) -> str:
+    """Read one attribute's value from a raw tag's attribute text, quoted or not."""
+    found = re.search(
+        rf"""(?<![\w-]){name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+        attributes,
+        re.IGNORECASE,
+    )
+    return "".join(filter(None, found.groups())) if found else ""
+
+
+def _mark_hidden(html: str) -> str:
+    """Turn the email's own hiding into `hidden`; sanitizing drops display and <style>.
+
+    Hidden means inline display:none, or a class hidden by a top-level rule such as
+    `.hidden{display:none}`. An element's own inline display wins, as in CSS.
+    """
+    # Most emails never hide anything.
+    if not re.search(r"display\s*:\s*none", html, re.IGNORECASE):
+        return html
+    css = " ".join(
+        re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL | re.IGNORECASE)
+    )
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    # @media and similar blocks target other screens or features; keep top-level rules.
+    css = re.sub(r"@[^{;]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", css)
+    # Only plain `.class` selectors count; text before ";" is a stray @import.
+    hidden = {
+        match[1]
+        for selectors, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        if re.search(r"display\s*:\s*none", declarations, re.IGNORECASE)
+        for selector in selectors.rsplit(";", 1)[-1].split(",")
+        if (match := re.fullmatch(r"\s*\.([\w-]+)\s*", selector))
+    }
+
+    def mark(tag: re.Match[str]) -> str:
+        inline = re.findall(
+            r"display\s*:\s*([\w-]+)", _attribute(tag[2], "style"), re.IGNORECASE
+        )
+        # The last inline display overrides class rules.
+        if inline:
+            hide = inline[-1].casefold() == "none"
+        else:
+            hide = bool(hidden.intersection(_attribute(tag[2], "class").split()))
+        return f"<{tag[1]} hidden{tag[2]}>" if hide else tag[0]
+
+    return re.sub(r"<([a-zA-Z][\w-]*)(\s[^>]*)>", mark, html)
+
+
 def formatted_html(
     body: dict[str, Any],
     text: str,
@@ -282,7 +330,7 @@ def formatted_html(
             )
 
     clean = nh3.clean(
-        html,
+        _mark_hidden(html),
         tags={
             "a",
             "abbr",
@@ -341,7 +389,7 @@ def formatted_html(
             "noscript",
         },
         attributes={
-            "*": {"style", "title", "dir", "lang"},
+            "*": {"style", "title", "dir", "lang", "hidden"},
             "a": {"href"},
             "img": {"src", "alt", "width", "height"},
             "table": {
@@ -386,6 +434,9 @@ def formatted_html(
             "min-width",
             "height",
             "max-height",
+            # Emails clip preview text with these; display:none becomes `hidden`.
+            "overflow",
+            "visibility",
             "margin",
             "margin-top",
             "margin-bottom",

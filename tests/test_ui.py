@@ -340,6 +340,42 @@ def mail_navigation(mail_keyboard):
     """)
 
 
+def test_feed_loads_bodies_on_approach_and_marks_focused_mail_read(mail_keyboard):
+    mail_keyboard("""
+        boot({feed: true});
+        const [lazy, reading] = observers, [a, b] = document.querySelectorAll('.feed-mail');
+        // Bodies load only as they approach the viewport.
+        assert.equal(requests.length, 0);
+        lazy.cross(a.querySelector('[data-fragment]'));
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/body/?fragment=1']);
+        // Scrolling quickly past a marks nothing; b stays in focus for a second and is marked read.
+        reading.cross(a); assert(a.classList.contains('focused'));
+        reading.cross(b); assert(!a.classList.contains('focused')); assert(b.classList.contains('focused'));
+        assert.deepEqual(timers.filter(timer => !timer.cleared).map(timer => timer.delay), [1000]);
+        timers.forEach(timer => timer.cleared || timer.callback());
+        assert(a.classList.contains('unread')); assert(!b.classList.contains('unread'));
+        assert.deepEqual(requests.at(-1), ['/messages/b/read/', {method: 'POST', headers: {'X-CSRFToken': 'token'}}]);
+        // This harness fails requests; a failed write leaves the email unread for its next focus.
+        setImmediate(() => assert(b.classList.contains('unread')));
+    """)
+
+
+def test_feed_j_k_scroll_to_mail_and_mark_the_mail_left_read(mail_keyboard):
+    mail_keyboard("""
+        boot({feed: true});
+        const [a, b] = document.querySelectorAll('.feed-mail');
+        press('j'); assert(a.classList.contains('focused')); assert(a.scrolled);
+        assert.equal(requests.length, 0);
+        // Leaving a with j marks it read at once; its pending timer no longer matters.
+        press('j'); assert(b.classList.contains('focused')); assert(!a.classList.contains('focused'));
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/read/']);
+        assert(timers[0].cleared);
+        // k moves back and marks b read the same way.
+        press('k'); assert(a.classList.contains('focused'));
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/a/read/', '/messages/b/read/']);
+    """)
+
+
 def test_context_shortcut_opens_editor_or_focuses_existing_draft(mail_keyboard):
     mail_keyboard("""
         boot({reading: true});
@@ -396,7 +432,10 @@ def mail_keyboard():
     harness = r"""
         const assert = require('node:assert/strict');
         const source = require('node:fs').readFileSync('static/app.js', 'utf8');
-        const storage = new Map(), requests = [], navigations = [];
+        const storage = new Map(), requests = [], navigations = [], observers = [], timers = [];
+        // Tests run due timers explicitly; clearTimeout marks one cancelled.
+        global.setTimeout = (callback, delay) => timers.push({callback, delay});
+        global.clearTimeout = id => { if (timers[id - 1]) timers[id - 1].cleared = true; };
         let document, rows, tabs, reader, editor, back, cancel, search, searchInput, searchToggle;
         class Element {
             constructor(tag = 'div', attrs = {}) {
@@ -427,6 +466,7 @@ def mail_keyboard():
             querySelectorAll(selector) { return this.children.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]); }
             querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
             append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
+            prepend(...children) { for (const child of children) { child.parent = this; this.children.unshift(child); } }
             remove() { this.parent.children = this.parent.children.filter(child => child !== this); }
             addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); }
             dispatch(type, event = {}) { for (const callback of this.listeners[type] || []) callback(event); }
@@ -445,10 +485,18 @@ def mail_keyboard():
             close() { delete this.attrs.open; }
         }
         global.Element = Element;
+        // Tests move targets across an observer's margin, as scrolling would.
+        global.IntersectionObserver = class {
+            constructor(callback) { this.callback = callback; this.targets = new Set(); observers.push(this); }
+            observe(target) { this.targets.add(target); }
+            unobserve(target) { this.targets.delete(target); }
+            cross(target, isIntersecting = true) { if (this.targets.has(target)) this.callback([{target, isIntersecting}]); }
+        };
         global.sessionStorage = {setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) || null};
         // Record requests and fail them like an offline browser; tests assert which were made.
         global.fetch = (...args) => { requests.push(args); return Promise.reject(Error('Offline test harness')); };
-        function boot({url = 'http://localhost:8002/', remote = false, reading = false, editing = false, ids = ['a', 'b', 'c']} = {}) {
+        function boot({url = 'http://localhost:8002/', remote = false, reading = false, editing = false, feed = false, ids = ['a', 'b', 'c']} = {}) {
+            observers.length = 0;
             global.location = new URL(url);
             global.window = {scrollY: 180, scrollTo: ({top}) => { window.scrollY = top; }};
             document = new Element('body'); global.document = document;
@@ -466,7 +514,15 @@ def mail_keyboard():
             document.append(new Element('a', {'data-user-context': '', href: '/settings/context/?next=/messages/a/'}));
             document.append(new Element('a', {'data-compose': '', href: '/compose/?next=/'}));
             rows = new Map(ids.map(id => ['mail-' + id, new Element('a', {id: 'mail-' + id, class: 'mail', href: '/messages/' + id + '/' + (remote ? '?remote=1' : '')})]));
-            if (!reading && !editing) document.append(...rows.values());
+            if (!reading && !editing && !feed) document.append(...rows.values());
+            if (feed) {
+                document.append(new Element('input', {name: 'csrfmiddlewaretoken', value: 'token'}));
+                for (const id of ids) {
+                    const item = new Element('article', {id: 'mail-' + id, class: 'feed-mail unread', 'data-read-url': '/messages/' + id + '/read/'});
+                    item.append(new Element('div', {'data-fragment': '/messages/' + id + '/body/?fragment=1', 'data-lazy': ''}));
+                    document.append(item);
+                }
+            }
             reader = new Element('section', {'data-reader': ''});
             back = new Element('a', {'data-back': '', href: '/#mail-a'});
             if (reading) {

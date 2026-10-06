@@ -2,21 +2,33 @@
 (() => {
   // These endpoints return escaped Django templates or nh3-sanitized email fragments only.
   // Fetch once per page; no extra reader state, and normal links work without JavaScript.
+  function loadFragment(target) {
+    fetch(target.dataset.fragment, {signal: AbortSignal.timeout(30000)})
+      .then(async response => {
+        // Keep the fallback and its retry link on provider failures, not an error page fragment.
+        if (!response.ok || !response.headers.get('Content-Type')?.startsWith('text/html')) throw new Error('Content unavailable');
+        target.innerHTML = await response.text();
+      })
+      .catch(() => {
+        const notice = document.createElement('p');
+        notice.textContent = 'Could not load this section. Use its link to retry.';
+        target.prepend(notice);
+      })
+      .finally(() => target.setAttribute('aria-busy', 'false'));
+  }
+
+  // Feed bodies load about a screen before they scroll into view; other fragments load at once.
   function loadFragments() {
-    for (const target of document.querySelectorAll('[data-fragment]')) {
-      fetch(target.dataset.fragment, {signal: AbortSignal.timeout(30000)})
-        .then(async response => {
-          // Keep the fallback and its retry link on provider failures, not an error page fragment.
-          if (!response.ok || !response.headers.get('Content-Type')?.startsWith('text/html')) throw new Error('Content unavailable');
-          target.innerHTML = await response.text();
-        })
-        .catch(() => {
-          const notice = document.createElement('p');
-          notice.textContent = 'Could not load this section. Use its link to retry.';
-          target.prepend(notice);
-        })
-        .finally(() => target.setAttribute('aria-busy', 'false'));
-    }
+    const lazy = new IntersectionObserver(entries => entries.forEach(entry => {
+      // Observers also report elements leaving the margin; load only on approach.
+      if (!entry.isIntersecting) return;
+      lazy.unobserve(entry.target);
+      loadFragment(entry.target);
+    }), {rootMargin: '100% 0px'});
+    document.querySelectorAll('[data-fragment]').forEach(target => {
+      if ('lazy' in target.dataset) lazy.observe(target);
+      else loadFragment(target);
+    });
   }
 
   function showSearch(show) {
@@ -124,6 +136,39 @@
     });
     // Closing keeps the typed reply for the next r.
     dialog.querySelector('[data-cancel]').addEventListener('click', event => { event.preventDefault(); dialog.close(); });
+  }
+
+  // Mark one feed email read in Gmail; a failed request leaves it unread for the next focus.
+  function markRead(item) {
+    // Already-read mail, or a request in flight, needs no write.
+    if (!item.classList.contains('unread')) return;
+    item.classList.remove('unread');
+    fetch(item.dataset.readUrl, {
+      method: 'POST',
+      headers: {'X-CSRFToken': document.querySelector('[name="csrfmiddlewaretoken"]').value},
+    })
+      .then(response => { if (!response.ok) throw new Error('Not marked read'); })
+      .catch(() => item.classList.add('unread'));
+  }
+
+  // The focused feed email is marked read after a second, so fast scrolling marks nothing.
+  function focusFeedMail(item) {
+    const previous = document.querySelector('.feed-mail.focused');
+    // Scrolling reports an email again as it settles; keep its running timer.
+    if (previous === item) return;
+    previous?.classList.remove('focused');
+    clearTimeout(previous?.readTimer);
+    item.classList.add('focused');
+    item.readTimer = setTimeout(() => markRead(item), 1000);
+  }
+
+  // The feed email crossing a reading line a third down the screen is in focus.
+  function setupFeed() {
+    const reading = new IntersectionObserver(entries => entries.forEach(entry => {
+      // Emails leaving the reading line lose focus when the next one arrives.
+      if (entry.isIntersecting) focusFeedMail(entry.target);
+    }), {rootMargin: '-30% 0px -69% 0px'});
+    document.querySelectorAll('.feed-mail').forEach(item => reading.observe(item));
   }
 
   // One click sends one email; a second submit would send a duplicate.
@@ -257,14 +302,33 @@
     return click(event, '[data-compose]');
   }
 
+  // The item j/k moves to; with nothing selected, both start at the first item.
+  function neighbour(items, current, key) {
+    return items[Math.max(0, Math.min(items.length - 1, items.indexOf(current) + (key === 'j' ? 1 : -1)))];
+  }
+
+  // In a feed, j/k scroll the next/previous email to the reading line.
+  function feedKey(event) {
+    const items = [...document.querySelectorAll('.feed-mail')];
+    // Ordinary lists move their row selection instead.
+    if (!items.length || event.shiftKey || !['j', 'k'].includes(event.key)) return false;
+    event.preventDefault();
+    const current = document.querySelector('.feed-mail.focused');
+    const next = neighbour(items, current, event.key);
+    // Moving on with j/k marks the email left read without waiting.
+    if (current && next !== current) markRead(current);
+    focusFeedMail(next);
+    next.scrollIntoView({block: 'start', behavior: 'smooth'});
+    return true;
+  }
+
   function listKey(event) {
     if (document.querySelector('[data-reader]') || event.shiftKey || !['j', 'k'].includes(event.key)) return false;
     const rows = [...document.querySelectorAll('.mail')];
     // An empty list has nothing to select.
     if (!rows.length) return true;
     event.preventDefault();
-    const index = rows.indexOf(document.querySelector('.mail.highlighted'));
-    highlight(rows[index < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'j' ? 1 : -1)))], true);
+    highlight(neighbour(rows, document.querySelector('.mail.highlighted'), event.key), true);
     return true;
   }
 
@@ -307,7 +371,7 @@
     return true;
   }
 
-  const keyHandlers = [contextKey, editorKey, escapeKey, fieldKey, tabOrderKey, modifiedKey, searchKey, composeKey, listKey, enterKey, readerKey, tabKey];
+  const keyHandlers = [contextKey, editorKey, escapeKey, fieldKey, tabOrderKey, modifiedKey, searchKey, composeKey, feedKey, listKey, enterKey, readerKey, tabKey];
 
   function onKey(event, sequence) {
     if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || !(event.target instanceof Element)) return;
@@ -346,6 +410,7 @@
     restorePosition();
     setupReader();
     setupSendForms();
+    setupFeed();
     setupTabDragging();
     const sequence = keySequence();
     document.addEventListener('keydown', event => onKey(event, sequence));

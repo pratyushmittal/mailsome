@@ -8,6 +8,20 @@
   <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% elif selected_tab %}{{ selected_tab.name }}{% else %}Others{% endif %}</strong> · {{ messages|length }} emails</span>
   {% if sender %}<a href="/">Back to inbox</a>{% elif selected_tab %}<a href="{% url 'tab_edit' selected_tab.id %}?next={{ return_url|urlencode }}">Edit label</a>{% endif %}
 </div>
+{# Feed tabs show whole emails; searches inside them stay ordinary lists. #}
+{% if selected_tab.feed and not query %}
+<div class="feed" data-feed>
+  {% for message in messages %}
+  <article class="feed-mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" data-read-url="{% url 'mark_read' message.id %}">
+    <header class="feed-heading">
+      <a class="subject" href="{{ message.url }}">{{ message.subject|default:"(No subject)" }}</a>{% include "includes/attachment_badge.html" with count=message.attachment_count %}{% if message.importance > importance_threshold %}<span class="importance-badge">Important</span>{% endif %}
+      <span class="sender">{{ message.sender }} · <time datetime="{{ message.date|date:'c' }}">{{ message.date|date:"M j, H:i" }}</time></span>
+    </header>
+    <div class="email-html" data-fragment="{% url 'message_body' message.id %}?fragment=1" data-lazy aria-busy="true"><a href="{% url 'message_body' message.id %}">Open formatted body</a></div>
+  </article>
+  {% empty %}<p class="empty">No messages here.</p>{% endfor %}
+</div>
+{% else %}
 <div class="mail-list inbox">
   {% for message in messages %}
   <a class="mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" href="{{ message.url }}" data-message-id="{{ message.id }}">
@@ -16,6 +30,7 @@
   </a>
   {% empty %}<p class="empty">No messages here.</p>{% endfor %}
 </div>
+{% endif %}
 {% if previous_url or next_url %}
 <nav class="pagination" aria-label="Message pages">
   {% if previous_url %}<a href="{{ previous_url }}">First page</a>{% endif %}
