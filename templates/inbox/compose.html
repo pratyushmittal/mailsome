@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{% if reply_to %}Reply{% else %}New message{% endif %} · Mailsome{% endblock %}
+{% block content %}
+<section class="filter-editor" data-editor>
+  <h1>{% if reply_to %}Reply: {{ reply_to.subject }}{% else %}New message{% endif %}</h1>
+  {% include "inbox/compose_form.html" %}
+</section>
+{% endblock %}

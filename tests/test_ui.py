@@ -69,10 +69,21 @@ def reader_shortcuts(mail_keyboard):
         for (const [key, selector] of [['m', '[data-sender-labels]'], ['n', '[data-sender-note]'], ['u', '[data-unsubscribe]']]) {
             press(key); assert(document.querySelector(selector).clicked);
         }
-        const reply = document.querySelector('[data-reply-gmail]');
+        const reply = document.querySelector('[data-reply]'), dialog = document.querySelector('[data-reply-dialog]');
         press('g'); press('r'); assert(!reply.clicked);
         press('r'); assert(document.querySelector('[data-sender-all]').clicked); assert(!reply.clicked);
-        press('r'); assert(reply.clicked);
+        press('O', document, {shiftKey: true}); assert(document.querySelector('[data-reply-gmail]').clicked);
+        // r replies inline instead of opening the standalone reply page.
+        const before = navigations.length, textarea = dialog.querySelector('textarea');
+        press('r'); assert('open' in dialog.attrs); assert.equal(document.activeElement, textarea);
+        assert.equal(navigations.length, before);
+        // The open reply keeps keys: Escape belongs to the dialog, not the back link.
+        assert(!press('Escape', textarea).defaultPrevented); assert(!back.clicked);
+        dialog.querySelector('[data-cancel]').click(); assert(!('open' in dialog.attrs));
+        assert.equal(navigations.length, before);
+        // Sending disables the button so a second submit cannot send a duplicate.
+        dialog.querySelector('form').dispatch('submit'); assert(dialog.querySelector('button').disabled);
+        boot(); press('c'); assert.equal(navigations.at(-1), '/compose/?next=/');
     """)
 
 
@@ -423,8 +434,15 @@ def mail_keyboard():
             getAttribute(key) { return this.attrs[key] ?? null; }
             focus() { document.activeElement = this; this.dispatch('focus'); }
             scrollIntoView() { this.scrolled = true; }
-            click() { this.clicked = true; this.dispatch('click'); if (this.attrs.href) navigations.push(this.attrs.href); }
+            click() {
+                this.clicked = true;
+                const event = {preventDefault() { this.defaultPrevented = true; }};
+                this.dispatch('click', event);
+                if (this.attrs.href && !event.defaultPrevented) navigations.push(this.attrs.href);
+            }
             requestSubmit() { this.submitted = true; this.dispatch('submit'); }
+            showModal() { this.attrs.open = ''; }
+            close() { delete this.attrs.open; }
         }
         global.Element = Element;
         global.sessionStorage = {setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) || null};
@@ -446,6 +464,7 @@ def mail_keyboard():
             search.append(searchInput, new Element('a', {'data-close-search': '', href: '/'}));
             document.append(searchToggle, search, new Element('form', {id: 'tab-order-form'}));
             document.append(new Element('a', {'data-user-context': '', href: '/settings/context/?next=/messages/a/'}));
+            document.append(new Element('a', {'data-compose': '', href: '/compose/?next=/'}));
             rows = new Map(ids.map(id => ['mail-' + id, new Element('a', {id: 'mail-' + id, class: 'mail', href: '/messages/' + id + '/' + (remote ? '?remote=1' : '')})]));
             if (!reading && !editing) document.append(...rows.values());
             reader = new Element('section', {'data-reader': ''});
@@ -457,6 +476,10 @@ def mail_keyboard():
                 for (const field of ['note', 'labels', 'all']) document.append(new Element('a', {['data-sender-' + field]: '', href: '/sender-' + field}));
                 document.append(new Element('a', {'data-unsubscribe': '', href: '/unsubscribe'}));
                 document.append(new Element('a', {'data-reply-gmail': '', href: 'https://mail.google.com/mail/?authuser=me%40example.com#all/a', target: '_blank'}));
+                const dialog = new Element('dialog', {'data-reply-dialog': ''}), send = new Element('form', {'data-send': ''});
+                send.append(new Element('textarea'), new Element('button', {type: 'submit'}), new Element('a', {'data-cancel': '', href: '/messages/a/'}));
+                dialog.append(send);
+                document.append(new Element('a', {'data-reply': '', href: '/messages/a/reply/'}), dialog);
             }
             editor = new Element('form', {'data-editor': ''});
             cancel = new Element('a', {'data-cancel': '', href: '/messages/a/'});

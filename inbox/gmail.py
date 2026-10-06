@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from email.message import EmailMessage
 from typing import TYPE_CHECKING, Any, cast
 
 import google_auth_httplib2
@@ -462,6 +464,18 @@ def remove_label_from_messages(
                 "removeLabelIds": [label_id],
             },
         ).execute(num_retries=2)
+
+
+def send_message(
+    client: GmailResource, mail: EmailMessage, thread_id: str | None = None
+) -> GmailMessage:
+    """Send once; a thread ID files a reply in its Gmail conversation."""
+    body: GmailMessage = {"raw": base64.urlsafe_b64encode(mail.as_bytes()).decode()}
+    # New mail starts its own conversation.
+    if thread_id:
+        body["threadId"] = thread_id
+    # No automatic retries: a retried send can deliver the same email twice.
+    return client.users().messages().send(userId="me", body=body).execute()
 
 
 def archive_thread(client: GmailResource, thread_id: str) -> None:

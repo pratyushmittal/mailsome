@@ -1,0 +1,5 @@
+<form method="post" action="{{ send_url }}" data-send>
+  {% csrf_token %}<input type="hidden" name="next" value="{{ next_url }}">
+  {% include "includes/form_fields.html" %}
+  <div class="form-actions"><button type="submit">Send</button><a href="{{ next_url }}" data-cancel>Cancel</a></div>
+</form>

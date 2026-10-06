@@ -20,6 +20,7 @@
       </nav>
       <div class="toolbar-actions">
         <button type="button" class="quiet search-toggle" aria-controls="mail-search" aria-expanded="true">Search</button>
+        {% if account %}<a class="quiet" href="{% url 'compose' %}?next={{ return_url|urlencode }}" data-compose aria-keyshortcuts="C" title="New message (c)">Compose</a>{% endif %}
         {% if account %}<form method="post" action="/refresh/" data-refresh>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><button class="quiet">Refresh</button></form>{% endif %}
         <a class="quiet" href="{% url 'user_context' %}?next={{ return_url|urlencode }}" data-user-context aria-keyshortcuts="Alt+Shift+C" title="Edit mail context (Alt+Shift+C)">Mail context</a>
         <a class="quiet" href="/settings/?next={{ return_url|urlencode }}">Settings</a>

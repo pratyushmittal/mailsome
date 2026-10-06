@@ -57,7 +57,8 @@
     </section>
     <section class="sender-address"><strong>{{ message.sender_email }}</strong>{% if sender_note %}<p class="sender-note">{{ sender_note }}</p>{% endif %}</section>
     <nav class="sender-actions" aria-label="Message actions">
-      <a href="https://mail.google.com/mail/?authuser={{ account.email|urlencode:"" }}#all/{{ message.id|urlencode:"" }}" target="_blank" rel="noopener noreferrer" data-reply-gmail title="Opens Gmail in a new tab; choose Reply there."><kbd>r</kbd> Open in Gmail to reply ↗</a>
+      <a href="{{ reply_url }}" data-reply><kbd>r</kbd> Reply</a>
+      <a href="https://mail.google.com/mail/?authuser={{ account.email|urlencode:"" }}#all/{{ message.id|urlencode:"" }}" target="_blank" rel="noopener noreferrer" data-reply-gmail title="Opens this message in Gmail in a new tab."><kbd>O</kbd> Open in Gmail ↗</a>
       <form method="post" action="{% url 'archive' message.id %}" data-archive>
         {% csrf_token %}<input type="hidden" name="next" value="{{ back_url }}"><button type="submit" class="quiet"><kbd>d</kbd> Archive conversation</button>
       </form>
@@ -74,4 +75,8 @@
     </section>
   </aside>
 </section>
+<dialog class="reply-dialog" data-reply-dialog aria-label="Reply">
+  <h2>Reply: {{ message.subject }}</h2>
+  {% include "inbox/compose_form.html" with form=reply_form send_url=reply_url next_url=return_url %}
+</dialog>
 {% endblock %}

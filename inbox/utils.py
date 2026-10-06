@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from email.message import EmailMessage
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -15,7 +16,7 @@ from inbox.models import Message
 if TYPE_CHECKING:
     from googleapiclient._apis.gmail.v1.schemas import Message as GmailMessage
 
-RECIPIENT_HEADERS = ("To", "Cc", "Bcc", "Delivered-To")
+RECIPIENT_HEADERS = ("To", "Cc", "Bcc", "Delivered-To", "Reply-To")
 
 
 def apply_message_update(
@@ -109,6 +110,38 @@ def message_from_gmail(message: GmailMessage) -> Message:
             for name in RECIPIENT_HEADERS
         },
     )
+
+
+def format_address(name: str, address: str) -> str:
+    """Format one recipient for forms and headers, keeping Unicode names readable."""
+    # Plain names read naturally; names with separators such as commas are quoted.
+    if name and re.search(r'[()<>@,:;."\[\]\\]', name):
+        name = '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return f"{name} <{address}>" if name else address
+
+
+def outgoing_mail(
+    values: dict[str, str], original: GmailMessage | None = None
+) -> EmailMessage:
+    """Build a plain-text email; replies cite the original so every client threads them."""
+    mail = EmailMessage()
+    mail["To"] = values["to"]
+    # An empty Cc header would be sent as a blank recipient list.
+    if values["cc"]:
+        mail["Cc"] = values["cc"]
+    mail["Subject"] = values["subject"]
+    headers = {
+        header["name"].lower(): header["value"]
+        for header in (original or {}).get("payload", {}).get("headers", [])
+    }
+    # Mail without a Message-ID still joins its Gmail conversation through the thread ID.
+    if "message-id" in headers:
+        mail["In-Reply-To"] = headers["message-id"].strip()
+        mail["References"] = " ".join(
+            [*headers.get("references", "").split(), headers["message-id"].strip()]
+        )
+    mail.set_content(values["body"])
+    return mail
 
 
 def _unsubscribe_link(header: str) -> str:

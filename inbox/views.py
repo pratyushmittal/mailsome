@@ -7,7 +7,7 @@ import hashlib
 import json
 import pickle
 from collections.abc import Callable
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -30,9 +30,14 @@ from accounts.models import Account
 from classifications import utils as classification_utils
 from classifications.models import LabelDecision
 from inbox import content, gmail, sender_filters
-from inbox.forms import SenderForm, TabForm, UnsubscribeForm
+from inbox.forms import ComposeForm, SenderForm, TabForm, UnsubscribeForm
 from inbox.models import Message, Sender, Tab
-from inbox.utils import apply_message_update, message_from_gmail
+from inbox.utils import (
+    apply_message_update,
+    format_address,
+    message_from_gmail,
+    outgoing_mail,
+)
 from jobs.pipeline import sync_requested
 from mailsome.errors import APIError, gmail_denial
 from mailsome.utilities import page, redirect_next, safe_next
@@ -302,7 +307,7 @@ def operation_error(error: Exception) -> tuple[int, str]:
 
 
 def form_error(
-    form: TabForm | SenderForm | UnsubscribeForm,
+    form: TabForm | SenderForm | UnsubscribeForm | ComposeForm,
     error: Exception,
     field: str | None = None,
 ) -> int:
@@ -565,8 +570,89 @@ def message(request: HttpRequest, message_id: str) -> HttpResponse:
             "sender_all_url": "/?" + urlencode({"sender": email}),
             "unsubscribe_url": f"/messages/{message_id}/unsubscribe/?"
             + urlencode({"next": request.get_full_path()}),
+            "reply_url": f"/messages/{message_id}/reply/?"
+            + urlencode({"next": request.get_full_path()}),
+            "reply_form": ComposeForm(initial=reply_initial(item)),
             "back_url": back_url,
         },
+    )
+
+
+def reply_initial(item: Message) -> dict[str, str]:
+    """Reply to all: Reply-To or the sender plus the other To and Cc recipients."""
+    account = (Account.objects.values_list("email", flat=True).first() or "").casefold()
+    recipients = item.recipients or {}
+    # A follow-up on mail we sent continues to the same people, as Gmail does.
+    if item.sender_email == account:
+        to = recipients.get("To", [])
+    else:
+        to = (recipients.get("Reply-To") or [item.sender]) + recipients.get("To", [])
+    seen = {account}
+    fields: dict[str, list[str]] = {"to": [], "cc": []}
+    for field, headers in (("to", to), ("cc", recipients.get("Cc", []))):
+        for name, address in getaddresses(headers):
+            # List each address once, To before Cc, never our own; malformed headers parse empty.
+            if address and address.casefold() not in seen:
+                seen.add(address.casefold())
+                fields[field].append(format_address(name, address))
+    # Keep one "Re:" prefix on longer exchanges.
+    subject = item.subject
+    if not subject.casefold().startswith("re:"):
+        subject = "Re: " + subject
+    return {
+        "to": ", ".join(fields["to"]),
+        "cc": ", ".join(fields["cc"]),
+        "subject": subject,
+    }
+
+
+def send_mail(values: dict[str, str], item: Message | None) -> None:
+    """Send new mail, or a reply into the conversation of `item`."""
+    # Sending uses the same Gmail modify permission as label changes.
+    if not gmail.can_label():
+        raise APIError(
+            403, "Reconnect Gmail and grant the Gmail modify permission to send mail."
+        )
+    with gmail.service() as client:
+        original = None
+        # Replies need the original's Message-ID; new mail has no original.
+        if item:
+            original = gmail.get_message_details(client, item.id)
+            # Gmail can delete the original while the reply is being written.
+            if original is None:
+                raise APIError(404, "The original message is no longer in Gmail.")
+        gmail.send_message(
+            client, outgoing_mail(values, original), item.thread_id if item else None
+        )
+    sync_requested.set()
+    # Show the sent reply when the reader reloads its conversation.
+    if item:
+        caches["reader"].delete(reader_key("thread", item.thread_id))
+
+
+@require_http_methods(["GET", "POST"])
+def compose(request: HttpRequest, message_id: str | None = None) -> HttpResponse:
+    """Write new mail, or a reply when opened from a message; failures keep the draft."""
+    item = read_message(message_id, remote=False) if message_id else None
+    form = ComposeForm(
+        request.POST if request.method == "POST" else None,
+        initial=reply_initial(item) if item else None,
+    )
+    status = 200
+    if request.method == "POST":
+        status = 400
+        if form.is_valid():
+            try:
+                send_mail(form.cleaned_data, item)
+            except (APIError, HttpError, RefreshError, OSError) as error:
+                status = form_error(form, error)
+            else:
+                return redirect_next(request)
+    return page(
+        request,
+        "inbox/compose.html",
+        {"form": form, "reply_to": item, "send_url": request.get_full_path()},
+        status=status,
     )
 
 

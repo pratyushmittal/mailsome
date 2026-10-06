@@ -1,9 +1,12 @@
 """Ordinary bound forms for local label and exact-sender preferences."""
 
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from typing import Any, cast
 
 from django import forms
+from django.core.validators import validate_email
+
+from inbox.utils import format_address
 
 
 class TabForm(forms.Form):
@@ -88,6 +91,37 @@ class SenderForm(forms.Form):
         cast(forms.MultipleChoiceField, self.fields["labels"]).choices = choices
         # Each editor saves only its advertised field, even if extra POST keys are supplied.
         del self.fields["labels" if field == "note" else "note"]
+
+
+def _addresses(value: str) -> str:
+    """Normalize comma-separated recipients, keeping display names."""
+    addresses = getaddresses([value])
+    try:
+        for _name, address in addresses:
+            validate_email(address)
+    except forms.ValidationError:
+        raise forms.ValidationError(
+            "Enter valid email addresses separated by commas."
+        ) from None
+    return ", ".join(format_address(name, address) for name, address in addresses)
+
+
+class ComposeForm(forms.Form):
+    to = forms.CharField(max_length=2000, help_text="Separate addresses with commas.")
+    cc = forms.CharField(max_length=2000, required=False, label="Cc")
+    subject = forms.CharField(max_length=998, required=False)
+    body = forms.CharField(widget=forms.Textarea(attrs={"rows": 10}))
+
+    def clean_to(self) -> str:
+        return _addresses(self.cleaned_data["to"])
+
+    def clean_cc(self) -> str:
+        # An empty optional Cc has no addresses to validate.
+        return _addresses(self.cleaned_data["cc"]) if self.cleaned_data["cc"] else ""
+
+    def clean_subject(self) -> str:
+        # Mail headers cannot contain line breaks; fold any pasted ones into spaces.
+        return " ".join(self.cleaned_data["subject"].split())
 
 
 class UnsubscribeForm(forms.Form):

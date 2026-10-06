@@ -8,6 +8,7 @@ urlpatterns = [
     path("tabs/<int:tab_id>/edit/", views.tab_edit, name="tab_edit"),
     path("tabs/order/", views.reorder_tabs, name="tab_order"),
     path("senders/edit/", views.sender_edit, name="sender_edit"),
+    path("compose/", views.compose, name="compose"),
     path(
         "messages/<str:message_id>/attachments/", views.attachments, name="attachments"
     ),
@@ -24,6 +25,7 @@ urlpatterns = [
     ),
     path("messages/<str:message_id>/body/", views.message_body, name="message_body"),
     path("messages/<str:message_id>/archive/", views.archive, name="archive"),
+    path("messages/<str:message_id>/reply/", views.compose, name="reply"),
     path(
         "messages/<str:message_id>/unsubscribe/", views.unsubscribe, name="unsubscribe"
     ),

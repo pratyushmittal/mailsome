@@ -122,15 +122,19 @@ On Settings or the context editor, it focuses the existing field without discard
 | Inbox/reader | `Tab` / `Shift+Tab` | Cycle label tabs |
 | Inbox/reader | `1`–`9` | Jump to a tab by position |
 | Inbox/reader | `/` | Open search |
+| Inbox/reader | `c` | Compose a new email |
 | Mail list | `j` / `k`, `Enter` | Select next/previous mail, then open |
 | Reader | `Escape` | Return to the list and restore position |
 | Reader | `d` | Archive the entire thread and open the next mail in the list; do not mark it read |
-| Reader | `r` | Open the message in Gmail to reply there |
+| Reader | `r` | Reply to all inline; `Escape` closes the reply and keeps the draft |
+| Reader | `O` | Open the message in Gmail |
 | Reader | `grr` | View all mail from the selected sender |
 | Reader | `m` | Edit sender label rules |
 | Reader | `n` | Add/edit a sender note |
 | Reader | `u` | Show the advertised unsubscribe option |
 
-Reply opens Gmail, not an in-app composer or automatically focused reply box.
+Replies and new mail are plain text without attachments or quoted history. Replies
+go to all: Reply-To or the sender plus the other To and Cc recipients, never your
+own address (your own mail: its recipients). They stay in the conversation. Sending is never retried automatically; a failed send keeps the draft.
 Unsubscribe is an external handoff: finish it, then confirm in Mailsome to add
 its `unsubscribed` label and sender rule.

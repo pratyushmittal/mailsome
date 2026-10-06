@@ -2,6 +2,8 @@
 
 import base64
 import copy
+from email import message_from_bytes
+from email.policy import default
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -36,6 +38,7 @@ from classifications.models import AIRequest
 from inbox import gmail
 from inbox import views as app
 from inbox.models import Message, Tab
+from inbox.utils import apply_message_update
 
 api = api_fixture
 client = client_fixture
@@ -1153,3 +1156,78 @@ def test_local_static_assets_are_buffered_for_asgi(client):
     assert response.status_code == 200 and not response.streaming
     assert response.content == (settings.BASE_DIR / "static/style.css").read_bytes()
     assert response.headers["Content-Type"].startswith("text/css")
+
+
+@pytest.mark.parametrize("reply", [True, False], ids=["reply", "compose"])
+def test_send_plain_text_reply_or_new_mail(client, tmp_path, api, reply):
+    conversation_ready(client, tmp_path, api)
+    api.mailbox["a"]["payload"]["headers"] += [
+        {"name": "Message-ID", "value": "<a@example.com>"},
+        {"name": "References", "value": "<root@example.com>"},
+        {"name": "Reply-To", "value": "List <list@example.com>"},
+        {
+            "name": "To",
+            "value": 'Me <ME@example.com>, "Doe, John" <john@example.com>',
+        },
+        {"name": "Cc", "value": "LIST@example.com, Boss <boss@example.com>"},
+    ]
+    apply_message_update(api.mailbox["a"])
+    if reply:
+        # Reply to all: Reply-To first, each address once, never our own address.
+        assert client.get("/messages/a/reply/").context["form"].initial == {
+            "to": 'List <list@example.com>, "Doe, John" <john@example.com>',
+            "cc": "Boss <boss@example.com>",
+            "subject": "Re: Subject a",
+        }
+        # Follow-ups on our own mail go to its recipients; the reader form matches.
+        form = client.get("/messages/sent/").context["reply_form"]
+        assert (form.initial["to"], form.initial["cc"]) == (
+            "Human <human@example.com>",
+            "",
+        )
+
+    response = client.post(
+        "/messages/a/reply/" if reply else "/compose/",
+        {
+            "to": "List <list@example.com>, b@example.com",
+            "cc": "",
+            "subject": "Re: Subject a\r\nBcc: x@example.com",
+            "body": "Thanks!\nSee you.",
+            "next": "/messages/a/",
+        },
+    )
+    assert response.status_code == 303 and response["Location"] == "/messages/a/"
+    request = api.messages.return_value.send.call_args.kwargs
+    sent = message_from_bytes(
+        base64.urlsafe_b64decode(request["body"]["raw"]), policy=default
+    )
+    assert sent["To"] == "List <list@example.com>, b@example.com"
+    assert "Cc" not in sent and "Bcc" not in sent
+    # Pasted line breaks cannot inject headers into the subject.
+    assert sent["Subject"] == "Re: Subject a Bcc: x@example.com"
+    assert sent.get_content().strip() == "Thanks!\nSee you."
+    if reply:
+        assert request["body"]["threadId"] == "thread-a"
+        assert sent["In-Reply-To"] == "<a@example.com>"
+        assert sent["References"] == "<root@example.com> <a@example.com>"
+    else:
+        assert "threadId" not in request["body"] and "In-Reply-To" not in sent
+    # Sends are never retried automatically; a retry could deliver a duplicate.
+    api.messages.return_value.send.return_value.execute.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure", ["invalid address", "gmail"])
+def test_failed_send_keeps_the_draft(client, tmp_path, api, failure):
+    synced(client, tmp_path, api)
+    api.messages.return_value.send.return_value.execute.side_effect = http_error(503)
+    response = client.post(
+        "/compose/",
+        {
+            "to": "not an address" if failure == "invalid address" else "b@example.com",
+            "subject": "Hello",
+            "body": "Draft text",
+        },
+    )
+    assert response.status_code == (400 if failure == "invalid address" else 502)
+    assert "Draft text" in response.text
+    assert api.messages.return_value.send.called == (failure == "gmail")
