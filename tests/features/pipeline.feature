@@ -12,9 +12,15 @@ Feature: Direct mail ingestion and periodic classification
 
     Examples:
       | failure            |
-      | history page       |
       | detail download    |
       | cursor replacement |
+
+  Scenario: Resume history synchronization from the last saved page
+    Given Gmail fails on the second history page
+    When history synchronization is attempted
+    Then the cursor moves to the first page's last record and the sync timestamp does not advance
+    When history synchronization runs again
+    Then it resumes from that record and completes the interval
 
   Scenario: Keep message ingestion responsive during classification
     Given the first periodic AI batch pauses while more mail arrives

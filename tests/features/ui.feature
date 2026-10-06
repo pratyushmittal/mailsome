@@ -25,7 +25,7 @@ Feature: Reading mail and using the local interface
 
   Scenario: Navigate the mail list and return from the reader with the keyboard
     Given a keyboard-driven mailbox
-    Then mail navigation restores selection after opening and returning and respects list boundaries
+    Then mail navigation restores selection after opening and returning, preloads and opens the next mail after archiving, and respects list boundaries
 
   Scenario: Use reader action shortcuts without conflicting with editing or sender history
     Given a keyboard-driven mailbox

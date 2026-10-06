@@ -21,7 +21,7 @@ and leave feature descriptions and implementation walkthroughs in README or code
 - `message_from_gmail()` returns an unsaved model. Persist explicit metadata fields; never save that instance over downloaded bodies or AI completion.
 - Load mail only through browsing and history events; no recurring inbox listing, preload, fixed message window, or per-message label-trust state. First connection captures a cursor without preloading. On expiry, anchor first, then fetch arrivals since the saved timestamp minus one minute; older changes/deletions are not recovered.
 - Persist labels from received message/thread details as well as history reads. Producers persist directly through `inbox/utils.py`, with ordinary ORM calls. No queues, executors, futures, or explicit persistence/download transactions. Only background sync advances the cursor/timestamp, after saves succeed.
-- Label writes request history sync; never edit cached labels directly. Sender writes never acknowledge AI decisions; the AI path acknowledges synced labels or its own writes.
+- Label writes request history sync; never edit cached labels directly. Sender writes never acknowledge AI decisions; the AI path acknowledges only its own writes, writing even labels the cache shows (it can lag). Resets remove labels and rely on sync; no confirmation reads.
 - Download batches ≤50; retry at most twice for 500/502/503/504, 429, or 403 rateLimitExceeded/userRateLimitExceeded. No transport/DNS/SSL retries.
 - Accept incomplete rows after interrupted initial saves; no special body-repair reads. Cursor replay or reloading browsing results provides recovery.
 

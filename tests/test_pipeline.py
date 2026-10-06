@@ -149,6 +149,8 @@ def encounter_message(client, api, source, monkeypatch):
             f"after:{previous_sync // 1000 - 60}",
         ] * 2
         assert [request.kwargs["pageToken"] for request in listings] == [None, "next"]
+        # Large pages let downloads pace batches within the per-user quota.
+        assert {request.kwargs["maxResults"] for request in listings} == {500}
         assert api.mock_calls.index(
             call.getProfile(userId="me")
         ) < api.mock_calls.index(call.messages().list(**listings[0].kwargs))
@@ -205,11 +207,15 @@ def verify_ingested_content(api, mailbox_with_uncached_message):
 
 
 @pytest.mark.parametrize("count", [0, 1, 50, 51, 111])
-def test_detail_downloads_use_batches_of_at_most_fifty(api, count):
+def test_detail_downloads_use_paced_batches_of_at_most_fifty(api, monkeypatch, count):
+    pauses = []
+    monkeypatch.setattr(gmail.time, "sleep", pauses.append)
     api.mailbox = {str(i): mail(str(i)) for i in range(count)}
     result = gmail.get_messages_for_list(api, list(api.mailbox))
     assert [item.id for item in result] == list(api.mailbox)
     assert api.batch_sizes == [min(50, count - start) for start in range(0, count, 50)]
+    # Gmail's per-user quota needs a pause between batches, not before the first one.
+    assert pauses == [10] * max(0, len(api.batch_sizes) - 1)
     api.reset_mock()
     gmail.get_messages_for_list(api, list(api.mailbox))
     api.new_batch_http_request.assert_not_called()
@@ -233,9 +239,7 @@ def failing_history_request(api, monkeypatch, failure):
         "history": [{"messagesAdded": [{"message": {"id": "good"}}]}],
     }
     history = api.history.return_value.list.return_value.execute
-    if failure == "history page":
-        history.side_effect = [{**page, "nextPageToken": "next"}, http_error(503)]
-    elif failure == "detail download":
+    if failure == "detail download":
         page["history"][0]["messagesAdded"].append({"message": {"id": "bad"}})
         history.return_value = page
     else:
@@ -257,6 +261,57 @@ def verify_unchanged_cursor(failure):
     assert account.synced_at is None
     if failure != "cursor replacement":
         assert Message.objects.filter(pk="good").exists()
+
+
+@scenario("pipeline.feature", "Resume history synchronization from the last saved page")
+def test_failed_sync_resumes_from_saved_page():
+    pass
+
+
+@given("Gmail fails on the second history page")
+def failing_second_history_page(api):
+    Account.objects.create(email="me@example.com", history_id="100")
+    api.mailbox = {"first": mail("first"), "second": mail("second")}
+    api.history.return_value.list.return_value.execute.side_effect = [
+        {
+            "historyId": "300",
+            "nextPageToken": "next",
+            "history": [{"id": "150", "messagesAdded": [{"message": {"id": "first"}}]}],
+        },
+        http_error(503),
+    ]
+
+
+@then(
+    "the cursor moves to the first page's last record and the sync timestamp does not advance"
+)
+def verify_checkpointed_cursor():
+    assert Account.objects.values_list("history_id", "synced_at").get() == (
+        "150",
+        None,
+    )
+    assert Message.objects.filter(pk="first").exists()
+
+
+@when("history synchronization runs again")
+def retry_sync(api):
+    api.history.return_value.list.return_value.execute.side_effect = [
+        {
+            "historyId": "300",
+            "history": [
+                {"id": "250", "messagesAdded": [{"message": {"id": "second"}}]}
+            ],
+        }
+    ]
+    gmail.sync(api)
+
+
+@then("it resumes from that record and completes the interval")
+def verify_resumed_sync(api):
+    assert api.history.return_value.list.call_args.kwargs["startHistoryId"] == "150"
+    account = Account.objects.get()
+    assert account.history_id == "300" and account.synced_at is not None
+    assert Message.objects.filter(pk="second").exists()
 
 
 def test_batch_missing_message_does_not_abort_other_downloads(api):
@@ -988,7 +1043,7 @@ def test_sender_bulk_writes_chunk_each_label_without_a_message_window(
         assert set(written) == set(api.mailbox)
 
 
-def test_ai_bulk_retry_preserves_successful_groups_and_acknowledges_cached_labels(
+def test_ai_bulk_retry_preserves_successful_groups_and_rewrites_cached_labels(
     client, tmp_path, api, monkeypatch
 ):
     synced(client, tmp_path, api)
@@ -1003,7 +1058,7 @@ def test_ai_bulk_retry_preserves_successful_groups_and_acknowledges_cached_label
                 source="ai",
                 reason="Saved match",
             )
-    # A prior confirmed write or history event already satisfied this decision.
+    # The cache already shows these labels; it may be stale, so they are written anyway.
     Message.objects.filter(pk="b").update(
         labels=["INBOX", "Label_humans", "Label_other"]
     )
@@ -1036,10 +1091,9 @@ def test_ai_bulk_retry_preserves_successful_groups_and_acknowledges_cached_label
     api.reset_mock()
     assert not labeling.process()
     api.messages.return_value.batchModify.assert_called_once()
-    assert api.messages.return_value.batchModify.call_args.kwargs["body"] == {
-        "ids": ["a", "during"],
-        "addLabelIds": [failed],
-    }
+    body = api.messages.return_value.batchModify.call_args.kwargs["body"]
+    assert set(body["ids"]) == {"a", "b", "during"}
+    assert body["addLabelIds"] == [failed]
     assert LabelDecision.objects.filter(applied=True).count() == 6
     assert set(Message.objects.get(pk="a").labels) == {"INBOX", "UNREAD"}
     classifier.assert_not_called()
@@ -1244,9 +1298,8 @@ def test_sender_labeled_mail_still_receives_ai_decisions(
         LabelDecision.objects.filter(applied=True).values_list("message_id", flat=True)
     ) == {"a", "during"}
 
-    assert api.messages.return_value.batchModify.call_count == int(
-        sender_label != "Label_humans"
-    )
+    # AI writes its own decision even when a sender rule already added the label.
+    assert api.messages.return_value.batchModify.call_count == 1
 
 
 @scenario(
@@ -1335,6 +1388,9 @@ def verify_reset_eligibility(api, mail_selected_for_reset):
         call.kwargs["body"]["removeLabelIds"][0]: call.kwargs["body"]["ids"]
         for call in api.messages.return_value.batchModify.call_args_list
     } == {"Label_humans": ["b"], "Label_other": ["a", "b"]}
+    # The reset reads nothing; history sync refreshes cached labels.
+    assert api.batch_sizes == []
+    assert pipeline.sync_requested.is_set()
     assert set(Message.objects.get(pk="a").labels) == {
         "INBOX",
         "UNREAD",
@@ -1394,8 +1450,9 @@ def verify_reclassification_scope(api, classify_reset_messages):
 
 def test_label_removals_are_chunked_without_losing_ids():
     provider = MagicMock()
-    messages = [Message(id=str(index)) for index in range(1001)]
-    gmail.remove_label_from_messages(provider, messages, "Label_humans")
+    gmail.remove_label_from_messages(
+        provider, [str(index) for index in range(1001)], "Label_humans"
+    )
     calls = provider.users.return_value.messages.return_value.batchModify.call_args_list
     assert [call.kwargs for call in calls] == [
         {
@@ -1409,9 +1466,8 @@ def test_label_removals_are_chunked_without_losing_ids():
     ]
 
 
-@pytest.mark.parametrize("failure_stage", ["remove", "refresh", "restored"])
 def test_failed_reset_preserves_decisions_until_confirmation_is_retried(
-    client, tmp_path, api, monkeypatch, failure_stage
+    client, tmp_path, api, monkeypatch
 ):
     seed_account(client, tmp_path)
     enable_ai(client)
@@ -1421,41 +1477,23 @@ def test_failed_reset_preserves_decisions_until_confirmation_is_retried(
     api.mailbox["a"]["labelIds"] += ["Label_humans", "Label_other"]
     apply_message_update(api.mailbox["a"])
     Message.objects.update(ai_classified=True, ai_attempts=3, importance=0.3)
-    selection = {"message_ids": ["a"], "label_ids": ["Label_humans", "Label_other"]}
-    for label in selection["label_ids"]:
+    for label in ("Label_humans", "Label_other"):
         LabelDecision.objects.create(
             message_id="a", label_id=label, source="ai", reason="Saved", applied=True
         )
     _, provider = measured_ai(monkeypatch)
     classifier = provider.system_one
     original = api.messages.return_value.batchModify.side_effect
-    get = api.messages.return_value.get.side_effect
 
     def remove(**kwargs):
-        if failure_stage == "remove" and kwargs["body"]["removeLabelIds"] == [
-            "Label_other"
-        ]:
+        # Fail the second label after the first removal succeeded.
+        if kwargs["body"]["removeLabelIds"] == ["Label_other"]:
             raise http_error(503)
-        result = original(**kwargs)
-        if (
-            failure_stage == "restored"
-            and "Label_humans" not in api.mailbox["a"]["labelIds"]
-        ):
-            api.mailbox["a"]["labelIds"].append("Label_humans")
-        return result
+        return original(**kwargs)
 
     api.messages.return_value.batchModify.side_effect = remove
-    if failure_stage == "refresh":
-
-        def fail_refresh(**kwargs):
-            request = get(**kwargs)
-            request.execute.side_effect = http_error(503)
-            return request
-
-        api.messages.return_value.get.side_effect = fail_refresh
-        monkeypatch.setattr(gmail.time, "sleep", lambda _: None)
     response = client.post("/settings/reclassify/", data={"confirm": "on"})
-    assert response.status_code == (409 if failure_stage == "restored" else 502)
+    assert response.status_code == 502
     labeling.process()
     message = Message.objects.get(pk="a")
     assert message.ai_classified and message.ai_attempts == 3
@@ -1463,14 +1501,13 @@ def test_failed_reset_preserves_decisions_until_confirmation_is_retried(
     classifier.assert_not_called()
 
     api.messages.return_value.batchModify.side_effect = original
-    api.messages.return_value.get.side_effect = get
     assert (
         client.post("/settings/reclassify/", data={"confirm": "on"}).status_code == 303
     )
     assert not LabelDecision.objects.exists()
     message.refresh_from_db()
     assert not message.ai_classified and message.ai_attempts == 0
-    assert set(message.labels) == {"INBOX", "UNREAD"}
+    assert set(api.mailbox["a"]["labelIds"]) == {"INBOX", "UNREAD"}
     classifier.assert_not_called()
 
 

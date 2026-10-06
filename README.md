@@ -45,7 +45,8 @@ Tests use fake providers and temporary databases, not your mailbox.
 - **Individual message:** opening an email reuses saved content and fetches any
   missing content and thread details needed for the view. Full-detail downloads
   save current labels, headers, text, and formatted content. Attachments download
-  only when requested. Opening mail does not mark it read.
+  only when requested. Opening mail does not mark it read. The reader preloads
+  the next mail in the list, so moving on or archiving with `d` opens it quickly.
 - **Labels:** sender rules and AI write labels to Gmail. History sync picks up
   those changes; the local display may briefly lag behind a successful write.
 - **Storage:** downloaded mail stays in `data/mailsome.sqlite3`, including older
@@ -89,19 +90,22 @@ Enable AI in **Settings**, using a TypeSafe API key entered there or supplied th
 - **AI — independently scans stored mail:** if enabled, process up to 100 emails
   per pass with TypeSafe's SDK and `jev-1.13.0`, one email request at a time. Each
   request includes a Noul per enabled label and an importance Score, even without
-  enabled labels. Send stored text, metadata, attachment names, and mail context;
-  exclude HTML and attachment contents. Continue passes while eligible mail remains.
-  Archived mail, spam, trash, drafts, and messages without stored bodies are excluded.
+  enabled labels. Send stored text, metadata, recipients, attachment names, and
+  mail context; exclude HTML and attachment contents. Continue passes while
+  eligible mail remains. Archived mail, spam, trash, drafts, and messages without
+  stored bodies are excluded.
 - **Reclassify cached inbox:** explicitly reset the selected AI-enabled labels,
   preserving assignments justified by current sender rules. Other assignments of
   those labels, including manual ones, are removed before AI runs again. Confirmation
   resets labels and scores for the regular worker, including importance-only setups.
   Failed or interrupted resets require confirmation again.
-- **Retries:** keep successful downloads but advance the history cursor only when
-  the pass succeeds. Gmail quota limits cause a wait before retrying. Failed or
-  interrupted AI requests retry automatically, up to three total attempts per email
-  across restarts; retries can incur charges. Saved decisions retry label writes
-  without another model call, including on idle passes.
+- **Retries:** keep successful downloads and advance the history cursor after each
+  saved history page, so a failed pass resumes where it stopped. Downloads pause
+  between batches to stay within Gmail's per-user quota, and quota limits cause
+  a wait before retrying. Failed or interrupted AI requests retry automatically,
+  up to three total attempts per email across restarts; retries can incur charges.
+  Saved decisions retry label writes without another model call, including on
+  idle passes.
 
 The database is `data/mailsome.sqlite3`. Stop the app and its workers before
 applying migrations.
@@ -120,7 +124,7 @@ On Settings or the context editor, it focuses the existing field without discard
 | Inbox/reader | `/` | Open search |
 | Mail list | `j` / `k`, `Enter` | Select next/previous mail, then open |
 | Reader | `Escape` | Return to the list and restore position |
-| Reader | `d` | Archive the entire thread; do not mark it read |
+| Reader | `d` | Archive the entire thread and open the next mail in the list; do not mark it read |
 | Reader | `r` | Open the message in Gmail to reply there |
 | Reader | `grr` | View all mail from the selected sender |
 | Reader | `m` | Edit sender label rules |

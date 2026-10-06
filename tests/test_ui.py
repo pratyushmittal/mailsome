@@ -63,6 +63,9 @@ def reader_shortcuts(mail_keyboard):
         press('d', new Element('textarea'));
         assert(!document.querySelector('[data-archive]').submitted);
         press('d'); assert(document.querySelector('[data-archive]').submitted);
+        // Without a saved list, archiving returns to the list and nothing is preloaded.
+        assert.equal(document.querySelector('[data-archive] input').value, '/#mail-a');
+        assert.equal(requests.length, 0);
         for (const [key, selector] of [['m', '[data-sender-labels]'], ['n', '[data-sender-note]'], ['u', '[data-unsubscribe]']]) {
             press(key); assert(document.querySelector(selector).clicked);
         }
@@ -305,7 +308,7 @@ def test_mail_navigation_restores_selection_and_handles_list_boundaries(mail_key
 
 
 @then(
-    "mail navigation restores selection after opening and returning and respects list boundaries"
+    "mail navigation restores selection after opening and returning, preloads and opens the next mail after archiving, and respects list boundaries"
 )
 def mail_navigation(mail_keyboard):
     mail_keyboard("""
@@ -313,13 +316,16 @@ def mail_navigation(mail_keyboard):
         press('j'); press('j'); press('j'); assert.equal(highlighted(), 'mail-c');
         press('k'); press('k'); press('Enter'); assert.equal(navigations.at(-1), '/messages/a/');
         boot({reading: true, url: 'http://localhost:8002/messages/a/'});
+        assert.equal(requests.at(-1)[0], '/messages/b/');
+        press('d'); assert.equal(document.querySelector('[data-archive] input').value, '/messages/b/');
         press('Escape'); assert.equal(navigations.at(-1), '/#mail-a');
         boot({url: 'http://localhost:8002/#mail-a'});
         assert.equal(highlighted(), 'mail-a');
         assert.equal(document.activeElement, rows.get('mail-a'));
         assert.equal(window.scrollY, 180);
         boot({ids: []}); press('j'); press('Enter'); assert.equal(highlighted(), null);
-        assert.equal(requests.length, 0);
+        // Only the reader's preload of the next mail reaches the network.
+        assert.deepEqual(requests.map(([url]) => url), ['/messages/b/']);
     """)
 
 
@@ -414,14 +420,16 @@ def mail_keyboard():
             addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); }
             dispatch(type, event = {}) { for (const callback of this.listeners[type] || []) callback(event); }
             setAttribute(key, value) { this.attrs[key] = value; }
+            getAttribute(key) { return this.attrs[key] ?? null; }
             focus() { document.activeElement = this; this.dispatch('focus'); }
             scrollIntoView() { this.scrolled = true; }
             click() { this.clicked = true; this.dispatch('click'); if (this.attrs.href) navigations.push(this.attrs.href); }
-            requestSubmit() { this.submitted = true; }
+            requestSubmit() { this.submitted = true; this.dispatch('submit'); }
         }
         global.Element = Element;
         global.sessionStorage = {setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) || null};
-        global.fetch = (...args) => { requests.push(args); throw Error('Unexpected network request'); };
+        // Record requests and fail them like an offline browser; tests assert which were made.
+        global.fetch = (...args) => { requests.push(args); return Promise.reject(Error('Offline test harness')); };
         function boot({url = 'http://localhost:8002/', remote = false, reading = false, editing = false, ids = ['a', 'b', 'c']} = {}) {
             global.location = new URL(url);
             global.window = {scrollY: 180, scrollTo: ({top}) => { window.scrollY = top; }};
@@ -443,7 +451,9 @@ def mail_keyboard():
             reader = new Element('section', {'data-reader': ''});
             back = new Element('a', {'data-back': '', href: '/#mail-a'});
             if (reading) {
-                document.append(reader, back, new Element('form', {'data-archive': ''}));
+                const archive = new Element('form', {'data-archive': ''});
+                archive.append(new Element('input', {name: 'next', value: '/#mail-a'}));
+                document.append(reader, back, archive);
                 for (const field of ['note', 'labels', 'all']) document.append(new Element('a', {['data-sender-' + field]: '', href: '/sender-' + field}));
                 document.append(new Element('a', {'data-unsubscribe': '', href: '/unsubscribe'}));
                 document.append(new Element('a', {'data-reply-gmail': '', href: 'https://mail.google.com/mail/?authuser=me%40example.com#all/a', target: '_blank'}));

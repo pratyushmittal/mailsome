@@ -724,7 +724,11 @@ def mail_state_input():
         body=body,
         sender='Human "A" <human@example.com>',
         subject='A <subject> & "quote"',
-        recipients={"To": ["Original <me@example.com>"]},
+        recipients={
+            "To": ["Original <me@example.com>"],
+            "Cc": [],
+            "Delivered-To": ["me@example.com"],
+        },
         attachment_count=2,
         rich_body={
             "html": "PRIVATE HTML",
@@ -757,14 +761,18 @@ def verify_safe_mail_state(mail_state_input, prepared_mail_state):
     assert email["subject"] == message.subject
     assert email["attachment_count"] == 2
     assert email["attachments"] == ['invoice & "bill".pdf']
-    assert "recipients" not in email
+    # Empty headers are omitted; display names are preserved.
+    assert email["recipients"] == {
+        "To": ["Original <me@example.com>"],
+        "Delivered-To": ["me@example.com"],
+    }
     assert state["user_context"] == "Family & work"
     assert "PRIVATE" not in json.dumps(state) and message.id not in json.dumps(state)
     assert message.body == body
 
 
 @pytest.mark.parametrize("attachment_count", [0, None])
-def test_email_state_preserves_large_inputs_and_omits_absent_attachments(
+def test_email_state_preserves_large_inputs_and_omits_absent_optional_fields(
     attachment_count,
 ):
     message = Message(
@@ -783,6 +791,7 @@ def test_email_state_preserves_large_inputs_and_omits_absent_attachments(
     assert state["user_context"] == context
     assert "attachment_count" not in state["email"]
     assert "attachments" not in state["email"]
+    assert "recipients" not in state["email"]
 
 
 def test_configuration_readers_follow_django_data_directory(

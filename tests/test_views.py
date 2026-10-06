@@ -498,7 +498,7 @@ def test_failed_formatted_content_can_show_a_safe_retry_message(
 
 @scenario(
     "views.feature",
-    "Reuse conversation details until an archive or mailbox change invalidates them",
+    "Reuse conversation details until an archive or account change invalidates them",
 )
 def test_reader_cache_reuse_and_invalidation_lifecycle(client, tmp_path, api):
     pass
@@ -543,27 +543,51 @@ def verify_cache_after_failed_archive(api):
 def archive_cached_conversation(client, api):
     api.threads.return_value.modify.side_effect = None
     api.threads.return_value.modify.reset_mock()
+    # The reader preloads the next mail, from another conversation.
+    assert client.get("/messages/b/").status_code == 200
     assert client.post("/messages/a/archive/").status_code == 303
 
 
-@then("successful archive, sync, and account changes invalidate the reader cache")
-def verify_reader_cache_invalidation(client, api, conversation_with_older_reply):
-    url = conversation_with_older_reply
+@then(
+    "the archived conversation is fetched again while other conversations and syncs keep the cache"
+)
+def verify_archive_invalidates_only_its_conversation(
+    client, api, conversation_with_older_reply
+):
+    # The stored conversation ID avoids downloading the message before archiving.
+    assert all(
+        request.kwargs["id"] != "a"
+        for request in api.messages.return_value.get.call_args_list
+    )
     api.threads.return_value.modify.assert_called_once_with(
         userId="me", id="thread-a", body={"removeLabelIds": ["INBOX"]}
     )
-    assert client.get(url).status_code == 200
+    assert client.get("/messages/b/").status_code == 200
     assert api.threads.return_value.get.call_count == 2
+    assert client.get(conversation_with_older_reply).status_code == 200
+    assert api.threads.return_value.get.call_count == 3
+    Account.objects.filter(pk=1).update(synced_at=NOW + 1, history_id="999")
+    assert client.get(conversation_with_older_reply).status_code == 200
+    assert api.threads.return_value.get.call_count == 3
 
-    for changes, downloads in [
-        ({"synced_at": NOW + 1}, 3),
-        ({"email": "another@example.com"}, 4),
-    ]:
-        Account.objects.filter(pk=1).update(**changes)
-        assert client.get(url).status_code == 200
-        assert api.threads.return_value.get.call_count == downloads
+
+@when("the connected account changes")
+def change_account():
+    Account.objects.filter(pk=1).update(email="another@example.com")
+
+
+@then("the conversation is fetched again and a disconnected account cannot read it")
+def verify_account_invalidation(client, api, conversation_with_older_reply):
+    assert client.get(conversation_with_older_reply).status_code == 200
+    assert api.threads.return_value.get.call_count == 4
     Account.objects.all().delete()
-    assert client.get(url).status_code == 401
+    assert client.get(conversation_with_older_reply).status_code == 401
+
+
+def test_archive_rejects_mail_removed_from_the_cache(client, tmp_path, api):
+    synced(client, tmp_path, api)
+    assert client.post("/messages/gone/archive/").status_code == 404
+    api.threads.return_value.modify.assert_not_called()
 
 
 def test_reader_returns_not_found_for_missing_messages(client, tmp_path, api):

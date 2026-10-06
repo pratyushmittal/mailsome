@@ -10,7 +10,6 @@ from django.conf import settings as django_settings
 from classifications.models import LabelDecision
 from inbox import gmail
 from inbox.models import Message, Tab
-from mailsome.errors import APIError
 
 DEFAULT_MODEL = "jev-1.13.0"
 DEFAULT_IMPORTANCE_LEVELS = [
@@ -47,17 +46,17 @@ def enabled_labels() -> list[dict[str, str]]:
     ]
 
 
-def _reset_targets(selection: dict[str, list[str]]) -> dict[str, list[Message]]:
+def _reset_targets(selection: dict[str, list[str]]) -> dict[str, list[str]]:
     """Select confirmed inbox message/label pairs not protected by current sender rules."""
     messages = list(
         Message.objects.inbox()
         .filter(pk__in=selection["message_ids"])
-        .defer("body", "rich_body")
+        .only("id", "sender")
     )
     # Lost history can hide assignments; remove even when the cached label is absent.
     return {
         tab.label_id: [
-            message for message in messages if message.sender_email not in tab.people
+            message.id for message in messages if message.sender_email not in tab.people
         ]
         for tab in Tab.objects.filter(
             label_id__in=selection["label_ids"], auto_classify=True
@@ -66,29 +65,22 @@ def _reset_targets(selection: dict[str, list[str]]) -> dict[str, list[Message]]:
 
 
 def reset_classifications(selection: dict[str, list[str]]) -> None:
-    """Reset labels directly, then make selected mail eligible for the worker.
+    """Remove labels in Gmail, then make selected mail eligible for the worker.
 
     Current sender rules protect each message/label pair. Keep decisions and
-    completion flags until removals and refreshed labels are confirmed.
+    completion flags until removals succeed. History sync refreshes cached labels;
+    AI writes do not rely on them.
     """
-    if selection["label_ids"]:
-        with gmail.service() as client:
-            for label_id, messages in _reset_targets(selection).items():
-                gmail.remove_label_from_messages(client, messages, label_id)
-            # Confirm through normal ingestion without touching the history cursor.
-            gmail.update_messages(client, selection["message_ids"], labels_only=True)
+    from jobs.pipeline import sync_requested
 
     targets = _reset_targets(selection)
-    # Another Gmail client may have restored a label; do not classify against an incomplete reset.
-    if any(
-        label_id in message.labels
-        for label_id, messages in targets.items()
-        for message in messages
-    ):
-        raise APIError(
-            409,
-            "Some reset labels are still present. Retry reclassification.",
-        )
+    # Importance-only setups have no labels to remove and may lack label access.
+    if targets:
+        with gmail.service() as client:
+            for label_id, message_ids in targets.items():
+                gmail.remove_label_from_messages(client, message_ids, label_id)
+        sync_requested.set()
+
     selected = Message.objects.inbox().filter(pk__in=selection["message_ids"])
     # Clear applied history too, including obsolete sender decisions: current Tab.people owns protection.
     LabelDecision.objects.filter(message__in=selected, label_id__in=targets).delete()
@@ -96,7 +88,7 @@ def reset_classifications(selection: dict[str, list[str]]) -> None:
 
 
 def apply_pending_labels() -> None:
-    """Bulk-add saved AI decisions using the latest synced labels, without paying again."""
+    """Bulk-add saved AI decisions without paying again."""
     from jobs.pipeline import sync_requested
 
     pending = LabelDecision.objects.filter(
@@ -111,28 +103,21 @@ def apply_pending_labels() -> None:
         # A tab may have been removed or disabled since selecting its pending label.
         if not Tab.objects.filter(label_id=label_id, auto_classify=True).exists():
             continue
-        messages = list(
-            Message.objects.filter(
-                id__in=pending.filter(label_id=label_id).values("message_id")
-            ).defer("body", "rich_body")
+        message_ids = list(
+            pending.filter(label_id=label_id).values_list("message_id", flat=True)
         )
         # Sync or another authorized write may have cleared these pending decisions.
-        if not messages:
+        if not message_ids:
             continue
         with gmail.service() as client:
-            for start in range(0, len(messages), 1_000):
-                batch = messages[start : start + 1_000]
-                missing = [
-                    message for message in batch if label_id not in message.labels
-                ]
-                if missing:
-                    gmail.add_label_to_messages(client, missing, label_id)
-                # Acknowledge each successful chunk, including labels already observed by sync.
+            for start in range(0, len(message_ids), 1_000):
+                batch = message_ids[start : start + 1_000]
+                # Write even labels the cache shows: it lags after resets, and re-adding is a no-op.
+                gmail.add_label_to_messages(client, batch, label_id)
                 LabelDecision.objects.filter(
-                    message_id__in=[message.id for message in batch],
+                    message_id__in=batch,
                     label_id=label_id,
                     source=LabelDecision.Source.AI,
                     applied=False,
                 ).update(applied=True)
-                if missing:
-                    sync_requested.set()
+                sync_requested.set()

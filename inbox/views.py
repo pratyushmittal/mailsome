@@ -415,19 +415,20 @@ def reorder_tabs(request: HttpRequest) -> HttpResponse:
     return redirect_next(request)
 
 
-def reader_cached[T](kind: str, identifier: str, load: Callable[[], T]) -> T:
-    """A small, process-local reader cache; sync changes and account changes invalidate it."""
-    account = (
-        Account.objects.filter(pk=1).values("email", "history_id", "synced_at").first()
-    )
+def reader_key(kind: str, identifier: str) -> str:
+    """Key reader entries by account; syncs keep them so preloaded mail survives."""
+    email = Account.objects.filter(pk=1).values_list("email", flat=True).first()
     # Never serve content left over from a disconnected account.
-    if account is None:
+    if email is None:
         raise APIError(401, "Connect Gmail first.")
-    key = hashlib.sha256(
-        json.dumps(
-            [str(settings.DATA_DIR), account, kind, identifier], sort_keys=True
-        ).encode()
+    return hashlib.sha256(
+        json.dumps([str(settings.DATA_DIR), email, kind, identifier]).encode()
     ).hexdigest()
+
+
+def reader_cached[T](kind: str, identifier: str, load: Callable[[], T]) -> T:
+    """A small, process-local reader cache; entries expire after 60 seconds."""
+    key = reader_key(kind, identifier)
     cached = caches["reader"].get(key)
     # None represents a miss; empty lists and dictionaries are valid results.
     if cached is not None:
@@ -796,14 +797,20 @@ def sender_edit(request: HttpRequest) -> HttpResponse:
 def archive(request: HttpRequest, message_id: str) -> HttpResponse:
     try:
         require_label_access()
+        # The reader stores every message it shows, so its conversation ID is local.
+        thread_id = (
+            Message.objects.filter(pk=message_id)
+            .values_list("thread_id", flat=True)
+            .first()
+        )
+        # Sync removes mail deleted in Gmail while its reader is still open.
+        if thread_id is None:
+            raise APIError(404, "This message is no longer available in Gmail.")
         with gmail.service() as client:
-            raw = gmail.get_message_details(client, message_id)
-            # Gmail can delete a message between opening its reader and clicking Archive.
-            if raw is None:
-                raise APIError(404, "This message is no longer available in Gmail.")
-            gmail.archive_thread(client, raw["threadId"])
-            sync_requested.set()
-            caches["reader"].clear()
+            gmail.archive_thread(client, thread_id)
+        sync_requested.set()
+        # Only this conversation changed; keep others, such as the preloaded next mail.
+        caches["reader"].delete(reader_key("thread", thread_id))
     except (APIError, HttpError, RefreshError, OSError) as error:
         status, detail = operation_error(error)
         return page(

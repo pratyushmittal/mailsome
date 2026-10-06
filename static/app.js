@@ -51,6 +51,8 @@ document.addEventListener('DOMContentLoaded', () => {
       sessionStorage.setItem('mailsome:list:' + location.pathname + location.search, JSON.stringify({
         row: document.querySelector('.mail.highlighted')?.id,
         scroll: window.scrollY,
+        // Row order lets the reader continue to the next mail after archiving.
+        rows: [...document.querySelectorAll('.mail')].map(row => [row.id, row.getAttribute('href')]),
       }));
     } catch { /* No persistent browser storage is required. */ }
   }
@@ -73,6 +75,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (saved?.row === row.id && Number.isFinite(saved.scroll)) window.scrollTo({top: saved.scroll});
       }
     } catch { /* A malformed fragment or unavailable storage must not break the page. */ }
+  }
+
+  // The next mail of the list this reader was opened from.
+  function nextMail() {
+    try {
+      const back = new URL(document.querySelector('[data-back]').getAttribute('href'), location.href);
+      const rows = JSON.parse(sessionStorage.getItem('mailsome:list:' + back.pathname + back.search) || 'null')?.rows || [];
+      const index = rows.findIndex(([id]) => id === back.hash.slice(1));
+      // The last row, or a reader opened outside a saved list, has no next mail.
+      return index >= 0 ? rows[index + 1]?.[1] || null : null;
+    } catch { return null; } // Unavailable storage keeps the ordinary return to the list.
+  }
+
+  const archive = document.querySelector('[data-archive]');
+  const next = archive && nextMail();
+  if (next) {
+    // Loading it now caches its conversation on the server, so it opens instantly.
+    fetch(next, {priority: 'low'}).catch(() => {});
+    // Archiving continues to it instead of returning to the list.
+    archive.addEventListener('submit', () => { archive.querySelector('input[name="next"]').value = next; });
   }
 
   function submitOrder(ids) {

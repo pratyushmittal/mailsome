@@ -37,7 +37,7 @@ def apply_sender_rules() -> None:
         messages = list(Message.objects.inbox().defer("body", "rich_body"))
         for tab in Tab.objects.exclude(label_id=None).exclude(people=[]):
             matches = [
-                message
+                message.id
                 for message in messages
                 if message.sender_email in tab.people
                 and tab.label_id not in message.labels

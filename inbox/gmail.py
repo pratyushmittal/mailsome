@@ -169,6 +169,9 @@ def update_messages(
         else set()
     )
     for start in range(0, len(message_ids), 50):
+        # Each batched get costs 20 units; 50 per 10s stays within Gmail's 6,000 units/min per user.
+        if start:
+            time.sleep(10)
         pending = message_ids[start : start + 50]
         failures: list[Exception] = []
         for attempt in range(3):
@@ -258,8 +261,9 @@ def sync(
 
     Fetch details for newly encountered messages and only labels for cached ones.
     Persist directly through the shared message-update function. Advance the cursor
-    only after all history pages and message updates succeed. Failures replay that
-    interval on the next pass. AI independently scans stored mail.
+    after each history page's updates succeed; failures replay only the unsaved pages.
+    The sync timestamp advances only after the whole interval succeeds. AI
+    independently scans stored mail.
     """
     account = Account.objects.get(pk=1)
     cursor = account.history_id
@@ -295,7 +299,10 @@ def sync(
             utils.apply_message_update({"id": message_id}, deleted=True)
         update_messages(client, sorted(changed - deleted), labels_only=True)
         page_token = page.get("nextPageToken")
-        # A page token is not a durable history cursor; acknowledge only the completed interval.
+        # Checkpoint saved pages so a failed catch-up resumes here instead of replaying them.
+        # A page without records has no record ID to resume from; keep the previous checkpoint.
+        if page_token and page.get("history"):
+            Account.objects.filter(pk=1).update(history_id=page["history"][-1]["id"])
         if not page_token:
             cursor = page["historyId"]
             break
@@ -308,8 +315,9 @@ def sync(
             page_token = None
             has_more_pages = True
             while has_more_pages:
+                # Large pages let update_messages pace its batches to the per-user quota.
                 messages_page = get_message_page(
-                    client, query=query, page_token=page_token
+                    client, query=query, page_token=page_token, size=500
                 )
                 update_messages(
                     client,
@@ -434,24 +442,23 @@ def add_label_to_message(
 
 
 def add_label_to_messages(
-    client: GmailResource, messages: list[Message], label_id: str
+    client: GmailResource, message_ids: list[str], label_id: str
 ) -> None:
     """Write up to 1,000 messages; callers acknowledge decisions, history refreshes labels."""
     client.users().messages().batchModify(
-        userId="me",
-        body={"ids": [message.id for message in messages], "addLabelIds": [label_id]},
+        userId="me", body={"ids": message_ids, "addLabelIds": [label_id]}
     ).execute(num_retries=2)
 
 
 def remove_label_from_messages(
-    client: GmailResource, messages: list[Message], label_id: str
+    client: GmailResource, message_ids: list[str], label_id: str
 ) -> None:
     """Remove one label in chunks of up to 1,000; callers own reset policy and refresh."""
-    for start in range(0, len(messages), 1_000):
+    for start in range(0, len(message_ids), 1_000):
         client.users().messages().batchModify(
             userId="me",
             body={
-                "ids": [message.id for message in messages[start : start + 1_000]],
+                "ids": message_ids[start : start + 1_000],
                 "removeLabelIds": [label_id],
             },
         ).execute(num_retries=2)

@@ -24,12 +24,20 @@ BATCH_SIZE = 100  # Bound each worker pass, not the number of emails in an API r
 
 def _message_state(message: Message, config: dict[str, Any]) -> dict[str, Any]:
     """Send stored text and metadata, never Gmail IDs, HTML, or attachment contents."""
-    attachments = {}
+    # Omit absent attachments and recipients instead of sending empty fields.
+    optional: dict[str, Any] = {}
     if message.attachment_count:
-        attachments = {
-            "attachment_count": message.attachment_count,
-            "attachments": [part["name"] for part in message.rich_body["attachments"]],
-        }
+        optional["attachment_count"] = message.attachment_count
+        optional["attachments"] = [
+            part["name"] for part in message.rich_body["attachments"]
+        ]
+    # Recipients reveal forwarding and who else received the mail; skip empty headers.
+    # NULL marks rows whose recipient headers were never fetched.
+    recipients = {
+        name: values for name, values in (message.recipients or {}).items() if values
+    }
+    if recipients:
+        optional["recipients"] = recipients
     # The SDK handles JSON serialization; keep the stored text unchanged.
     return {
         "user_context": config["user_context"],
@@ -39,7 +47,7 @@ def _message_state(message: Message, config: dict[str, Any]) -> dict[str, Any]:
             "received_at": datetime.fromtimestamp(
                 message.received_at / 1000, ZoneInfo("Asia/Kolkata")
             ).isoformat(),
-            **attachments,
+            **optional,
             "body": message.body,
         },
     }

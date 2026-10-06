@@ -33,14 +33,16 @@ Feature: Tabs, search, readers, and explicit mail actions
     When I open, validate, edit, and unpin the local tab
     Then the local operations never request Gmail labels
 
-  Scenario: Reuse conversation details until an archive or mailbox change invalidates them
+  Scenario: Reuse conversation details until an archive or account change invalidates them
     Given a stored conversation has an older reply
     When I revisit the older reply twice
     Then the conversation is fetched only once
     When archiving fails and I revisit the reader
     Then the failed archive leaves the reader cache usable
     When archiving the conversation succeeds
-    Then successful archive, sync, and account changes invalidate the reader cache
+    Then the archived conversation is fetched again while other conversations and syncs keep the cache
+    When the connected account changes
+    Then the conversation is fetched again and a disconnected account cannot read it
 
   Scenario: Reuse reader content after downloading missing fields
     Given a stored message is missing body or action-header data
