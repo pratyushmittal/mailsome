@@ -9,14 +9,14 @@ Feature: Reading mail and using the local interface
     When I request the selected reply formatted body
     Then only its HTML body attachment is downloaded and displayed
 
-  Scenario: Read formatted email without running sender content or loading trackers
+  Scenario: Read formatted email with its images without running sender content
     Given an email contains formatted HTML, an embedded image, and a tracker
     When I open the reader and its formatted body
-    Then formatted content and the embedded image appear while scripts and trackers are blocked
-    When I explicitly allow external images for one view
-    Then that view allows the remote image
-    When I open the formatted body again without image consent
-    Then external images are blocked again
+    Then formatted content and its images appear while scripts are blocked
+    When I block external images for one view
+    Then that view blocks the remote image
+    When I open the formatted body again
+    Then external images load again
 
   Scenario: Edit sender notes with plain forms independently of cached mail
     Given a stored sender has a note editor in the reader

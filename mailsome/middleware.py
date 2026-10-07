@@ -8,9 +8,9 @@ and requires the app's request header and same-origin checks for API polling.
 OAuth state validation and Django's CSRF middleware remain separate protections.
 
 Responses disable caching of private mail and set browser policies restricting
-scripts, framing, content-type guessing, and referrer disclosure. Email images
-from HTTPS sites are allowed by the default policy only when requested for that
-view. View exceptions use the app's shared error response handling.
+scripts, framing, content-type guessing, and referrer disclosure. Email bodies
+render in frames with their own stricter policy. View exceptions use the app's
+shared error response handling.
 
 These checks are not authentication: non-browser clients can forge headers.
 The server must remain local and must not be exposed through hosting or tunnels.
@@ -72,9 +72,7 @@ class LocalSecurity:
             "Content-Security-Policy",
             (
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:"
-                + (" https:" if request.GET.get("images") == "1" else "")
-                + "; "
+                "img-src 'self' data:; "
                 "object-src 'none'; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             ),
         )

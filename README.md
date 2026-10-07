@@ -46,7 +46,8 @@ Tests use fake providers and temporary databases, not your mailbox.
 - **Individual message:** opening an email reuses saved content and fetches any
   missing content and thread details needed for the view. Full-detail downloads
   save current labels, headers, text, and formatted content. Attachments download
-  only when requested. Opening mail does not mark it read. The reader preloads
+  only when requested. External images load by default; **Block external images**
+  turns them off for one view. Opening mail does not mark it read. The reader preloads
   the next mail in the list, so moving on or archiving with `d` opens it quickly.
 - **Feed tabs:** enable **Open as a feed** on a label to read its inbox mail as one
   scrolling page of full emails. Bodies load as you approach them. The email at the

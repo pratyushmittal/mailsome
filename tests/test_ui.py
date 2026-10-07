@@ -200,7 +200,7 @@ def verify_lazy_reply_body(api, requested_reply_body):
 
 @scenario(
     "ui.feature",
-    "Read formatted email without running sender content or loading trackers",
+    "Read formatted email with its images without running sender content",
 )
 def test_formatted_email_sanitization_embedded_image_and_per_view_consent(
     client, tmp_path, api
@@ -218,25 +218,23 @@ def mail_with_images_and_tracker(client, tmp_path, api):
 )
 def opened_formatted_email(client):
     reader = client.get("/messages/a/")
-    assert reader.status_code == 200 and "Load external images" in reader.text
+    assert reader.status_code == 200 and "Block external images" in reader.text
     # The reader may frame only the app's own sandboxed body documents.
     assert "frame-src 'self'" in reader.headers["Content-Security-Policy"]
     rendered = client.get(reader.context["body_url"])
     return rendered
 
 
-@then(
-    "formatted content and the embedded image appear while scripts and trackers are blocked"
-)
+@then("formatted content and its images appear while scripts are blocked")
 def verify_default_image_policy(api, opened_formatted_email):
     rendered = opened_formatted_email
     assert rendered.status_code == 200
     assert "Welcome" in rendered.text and "<script" not in rendered.text
     assert "data:image/png;base64," + INLINE_PNG in rendered.text
-    assert 'src="https://tracker.example' not in rendered.text
-    # The email's own CSS may name trackers; the frame's policy blocks those loads.
+    assert 'src="https://tracker.example/pixel"' in rendered.text
+    # Images load by default; stylesheets, fonts, and other remote loads stay blocked.
     policy = rendered.headers["Content-Security-Policy"]
-    assert "default-src 'none'" in policy and "img-src data:;" in policy
+    assert "default-src 'none'" in policy and "img-src data: https:;" in policy
     # Without scripts, same-origin only lets the app size the frame.
     assert "allow-same-origin" in policy and "allow-scripts" not in policy
     api.messages.return_value.attachments.return_value.get.assert_called_once_with(
@@ -244,36 +242,26 @@ def verify_default_image_policy(api, opened_formatted_email):
     )
 
 
-@when(
-    "I explicitly allow external images for one view",
-    target_fixture="formatted_view_with_images",
-)
-def formatted_view_with_images(client):
-    allowed = client.get("/messages/a/body/?images=1")
-    return allowed
+@when("I block external images for one view", target_fixture="blocked_view")
+def blocked_view(client):
+    return client.get("/messages/a/body/?images=0")
 
 
-@then("that view allows the remote image")
-def verify_allowed_external_image(formatted_view_with_images):
-    allowed = formatted_view_with_images
-    assert 'src="https://tracker.example/pixel"' in allowed.text
-    assert "img-src data: https:;" in allowed.headers["Content-Security-Policy"]
+@then("that view blocks the remote image")
+def verify_blocked_external_image(blocked_view):
+    assert 'src="https://tracker.example' not in blocked_view.text
+    assert "img-src data:;" in blocked_view.headers["Content-Security-Policy"]
 
 
-@when(
-    "I open the formatted body again without image consent",
-    target_fixture="formatted_view_without_consent",
-)
-def formatted_view_without_consent(client):
-    blocked = client.get("/messages/a/body/")
-    return blocked
+@when("I open the formatted body again", target_fixture="reopened_view")
+def reopened_view(client):
+    return client.get("/messages/a/body/")
 
 
-@then("external images are blocked again")
-def verify_blocked_external_image(formatted_view_without_consent):
-    blocked = formatted_view_without_consent
-    assert 'src="https://tracker.example' not in blocked.text
-    assert "img-src data:;" in blocked.headers["Content-Security-Policy"]
+@then("external images load again")
+def verify_reloaded_external_image(reopened_view):
+    assert 'src="https://tracker.example/pixel"' in reopened_view.text
+    assert "img-src data: https:;" in reopened_view.headers["Content-Security-Policy"]
 
 
 @scenario(

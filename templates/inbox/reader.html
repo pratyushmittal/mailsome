@@ -23,7 +23,7 @@
     <nav class="body-options" aria-label="Message format">
       <a href="{{ formatted_url }}"{% if formatted %} aria-current="true"{% endif %}>Formatted</a>
       <a href="{{ text_url }}"{% if not formatted %} aria-current="true"{% endif %}>Plain text</a>
-      {% if formatted %}{% if request.GET.images == '1' %}<a href="{{ formatted_url }}">Block external images</a>{% else %}<a href="{{ images_url }}">Load external images</a><span class="quiet">Images may reveal that you opened this email.</span>{% endif %}{% endif %}
+      {% if formatted %}{% if request.GET.images == '0' %}<a href="{{ formatted_url }}">Load external images</a>{% else %}<a href="{{ blocked_url }}">Block external images</a><span class="quiet">Images may reveal that you opened this email.</span>{% endif %}{% endif %}
     </nav>
     {% endif %}
     {% if formatted %}

@@ -526,8 +526,8 @@ def message(request: HttpRequest, message_id: str) -> HttpResponse:
     presentation.pop("images", None)
     formatted_url = "?" + urlencode({**presentation.dict(), "format": "html"})
     text_url = "?" + urlencode({**presentation.dict(), "format": "text"})
-    images_url = "?" + urlencode(
-        {**presentation.dict(), "format": "html", "images": "1"}
+    blocked_url = "?" + urlencode(
+        {**presentation.dict(), "format": "html", "images": "0"}
     )
     has_html = item.rich_body is None or bool(
         item.rich_body.get("html") or item.rich_body.get("html_parts")
@@ -549,7 +549,7 @@ def message(request: HttpRequest, message_id: str) -> HttpResponse:
             "has_html": has_html,
             "formatted_url": formatted_url,
             "text_url": text_url,
-            "images_url": images_url,
+            "blocked_url": blocked_url,
             "body_url": f"/messages/{message_id}/body/?"
             + urlencode(
                 {
@@ -766,7 +766,8 @@ def message_body(request: HttpRequest, message_id: str) -> HttpResponse:
 
         return reader_cached("inline", message_id + ":" + attachment_id, load)
 
-    external = request.GET.get("images") == "1"
+    # External images load by default; a view can block them, e.g. to avoid tracking.
+    external = request.GET.get("images") != "0"
     try:
         item = read_message(
             message_id, remote=request.GET.get("remote") == "1", formatted=True
