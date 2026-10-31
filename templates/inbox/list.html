@@ -5,7 +5,13 @@
 <section class="empty"><h1>Connect your Gmail inbox</h1><a href="/auth/connect">Connect Gmail</a></section>
 {% else %}
 <div class="view-caption">
-  <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% elif selected_tab %}{{ selected_tab.name }}{% elif current_tab == 'others' %}Others{% else %}All{% endif %}</strong> · {{ messages|length }} emails</span>
+  <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% else %}{{ list_name }}{% endif %}</strong> · {{ messages|length }} emails</span>
+  {% if not query %}
+  <form method="post" action="{% url 'archive_tab' %}{% if sender %}?sender={{ sender|urlencode }}{% endif %}" data-confirm="Archive every inbox email {% if sender %}from {{ sender }}{% else %}in {{ list_name }}{% endif %}? Each email leaves the inbox; nothing is deleted.">
+    {% csrf_token %}<input type="hidden" name="tab" value="{{ current_tab }}"><input type="hidden" name="next" value="{{ return_url }}">
+    <button type="submit" class="quiet">Archive all</button>
+  </form>
+  {% endif %}
   <button type="submit" form="selection" data-archive-selected hidden aria-keyshortcuts="D">Archive selected</button>
   {% if sender %}<a href="/">Back to inbox</a>{% elif selected_tab %}<a href="{% url 'tab_edit' selected_tab.id %}?next={{ return_url|urlencode }}">Edit label</a>{% endif %}
 </div>

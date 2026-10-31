@@ -10,6 +10,7 @@ urlpatterns = [
     path("senders/edit/", views.sender_edit, name="sender_edit"),
     path("compose/", views.compose, name="compose"),
     path("messages/archive/", views.archive_selected, name="archive_selected"),
+    path("tabs/archive/", views.archive_tab, name="archive_tab"),
     path(
         "messages/<str:message_id>/attachments/", views.attachments, name="attachments"
     ),

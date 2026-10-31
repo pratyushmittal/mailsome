@@ -203,6 +203,13 @@
     document.querySelectorAll('.feed-mail').forEach(item => reading.observe(item));
   }
 
+  // Forms with data-confirm ask first, such as archiving every email in a tab.
+  function setupConfirmations() {
+    document.querySelectorAll('form[data-confirm]').forEach(form => form.addEventListener('submit', event => {
+      if (!confirm(form.dataset.confirm)) event.preventDefault();
+    }));
+  }
+
   // One click sends one email; a second submit would send a duplicate.
   function setupSendForms() {
     document.querySelectorAll('[data-send]').forEach(form => form.addEventListener('submit', () => {
@@ -462,6 +469,7 @@
     restorePosition();
     setupReader();
     setupSendForms();
+    setupConfirmations();
     setupFeed();
     setupTabDragging();
     const sequence = keySequence();

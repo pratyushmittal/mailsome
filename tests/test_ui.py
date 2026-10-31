@@ -400,6 +400,13 @@ def test_list_selection_toggles_with_x_or_space_and_d_archives(mail_keyboard):
         press('j', box('a')); assert.equal(highlighted(), 'mail-a');
         // Clicking a row outside its checkbox and link opens the mail.
         rows.get('mail-c').click(); assert.equal(navigations.at(-1), '/messages/c/');
+        // Archive all asks first; declining keeps the tab untouched.
+        const archiveAll = document.getElementById('archive-tab'), asked = [];
+        global.confirm = question => { asked.push(question); return false; };
+        archiveAll.requestSubmit(); assert(!archiveAll.submitted);
+        global.confirm = () => true;
+        archiveAll.requestSubmit(); assert(archiveAll.submitted);
+        assert.deepEqual(asked, ['Archive every inbox email in All?']);
     """)
 
 
@@ -508,7 +515,11 @@ def mail_keyboard():
                 this.dispatch('click', event);
                 if (this.attrs.href && !event.defaultPrevented) navigations.push(this.attrs.href);
             }
-            requestSubmit() { this.submitted = true; this.dispatch('submit'); }
+            requestSubmit() {
+                const event = {target: this, preventDefault() { this.defaultPrevented = true; }};
+                this.dispatch('submit', event);
+                this.submitted = !event.defaultPrevented;
+            }
             showModal() { this.attrs.open = ''; }
             close() { delete this.attrs.open; }
         }
@@ -554,6 +565,7 @@ def mail_keyboard():
             }));
             if (!reading && !editing && !feed) {
                 document.append(new Element('input', {type: 'checkbox', 'data-select-all': ''}), new Element('button', {'data-archive-selected': ''}), new Element('form', {id: 'selection'}));
+                document.append(new Element('form', {id: 'archive-tab', 'data-confirm': 'Archive every inbox email in All?'}));
                 document.append(...rows.values());
             }
             if (feed) {

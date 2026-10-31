@@ -26,6 +26,7 @@ from googleapiclient.errors import HttpError
 
 # Provider schemas are supplied by type stubs, not runtime modules.
 if TYPE_CHECKING:
+    from googleapiclient._apis.gmail.v1 import GmailResource
     from googleapiclient._apis.gmail.v1.schemas import Label
 
 from accounts.models import Account
@@ -83,34 +84,41 @@ def find_tab(configured: list[Tab], tab_id: str) -> Tab:
     return tab
 
 
+def tab_filter(client: GmailResource, tab_id: str) -> tuple[str, list[str]]:
+    """Gmail query and labels for a tab's inbox mail: All, Others, or one label tab."""
+    configured = list(Tab.objects.all())
+    if tab_id == "others":
+        # Gmail queries exclude by name; resolve current names so external renames stay correct.
+        names = (
+            {label["id"]: label["name"] for label in gmail.list_labels(client)}
+            if configured
+            else {}
+        )
+        query = " ".join(
+            f"-label:{json.dumps(names[tab.label_id])}"
+            if tab.label_id in names
+            else f"-({tab.query})"
+            if tab.query
+            else ""
+            for tab in configured
+        )
+        return query, ["INBOX"]
+    # No tab means All, the whole inbox.
+    if not tab_id:
+        return "", ["INBOX"]
+    tab = find_tab(configured, tab_id)
+    # Legacy saved-search tabs have a query instead of a label.
+    return ("", ["INBOX", tab.label_id]) if tab.label_id else (tab.query, ["INBOX"])
+
+
 def gmail_page(request: HttpRequest) -> dict[str, Any]:
     """List one Gmail page: All, Others, a label tab, or a search, newest first."""
     query = request.GET.get("q", "").strip()
-    tab_id = request.GET.get("tab")
-    configured = list(Tab.objects.all())
-    labels = [] if query else ["INBOX"]
     with gmail.service() as client:
-        if not query and tab_id == "others":
-            # Gmail queries exclude by name; resolve current names so external renames stay correct.
-            names = (
-                {label["id"]: label["name"] for label in gmail.list_labels(client)}
-                if configured
-                else {}
-            )
-            query = " ".join(
-                f"-label:{json.dumps(names[tab.label_id])}"
-                if tab.label_id in names
-                else f"-({tab.query})"
-                if tab.query
-                else ""
-                for tab in configured
-            )
-        elif not query and tab_id:
-            tab = find_tab(configured, tab_id)
-            if tab.label_id:
-                labels.append(tab.label_id)
-            else:
-                query = tab.query
+        # Searches cover all mail; tabs cover their inbox mail.
+        query, labels = (
+            (query, []) if query else tab_filter(client, request.GET.get("tab", ""))
+        )
         try:
             result = gmail.get_message_page(
                 client, query=query, labels=labels, page_token=request.GET.get("page")
@@ -994,6 +1002,43 @@ def mark_done(request: HttpRequest, message_id: str) -> HttpResponse:
         gmail.remove_labels_from_message(client, message_id, ["UNREAD", "INBOX"])
     sync_requested.set()
     return HttpResponse(status=204)
+
+
+@require_http_methods(["POST"])
+def archive_tab(request: HttpRequest) -> HttpResponse:
+    """Archive every inbox email Gmail lists for a tab or sender, including unstored mail."""
+    try:
+        require_label_access()
+        with gmail.service() as client:
+            # Sender history pages archive that sender's inbox mail.
+            if request.GET.get("sender"):
+                query = f"from:{json.dumps(sender_email(request))}"
+                labels = ["INBOX"]
+            else:
+                query, labels = tab_filter(client, request.POST.get("tab", ""))
+            message_ids: list[str] = []
+            page_token = None
+            has_more_pages = True
+            while has_more_pages:
+                result = gmail.get_message_page(
+                    client, query=query, labels=labels, page_token=page_token, size=500
+                )
+                message_ids += [item["id"] for item in result.get("messages", [])]
+                page_token = result.get("nextPageToken")
+                has_more_pages = bool(page_token)
+            gmail.remove_label_from_messages(client, message_ids, "INBOX")
+        sync_requested.set()
+        # Many conversations changed; reopened ones should show their new labels.
+        caches["reader"].clear()
+    except (APIError, HttpError, RefreshError, OSError) as error:
+        status, detail = operation_error(error)
+        return page(
+            request,
+            "inbox/action_error.html",
+            {"detail": detail, "action_url": request.get_full_path()},
+            status=status,
+        )
+    return redirect_next(request)
 
 
 @require_http_methods(["POST"])

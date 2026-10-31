@@ -1338,3 +1338,55 @@ def test_archive_selected_archives_only_the_chosen_emails(client, tmp_path, api)
     api.messages.return_value.batchModify.reset_mock()
     assert client.post("/messages/archive/", {"next": "/"}).status_code == 303
     api.messages.return_value.batchModify.assert_not_called()
+
+
+def test_tabs_show_stored_inbox_counts_and_fade_when_empty(client, tmp_path, api):
+    synced(client, tmp_path, api)
+    humans = Tab.objects.create(name="Humans", label_id="Label_humans")
+    empty = Tab.objects.create(name="Receipts", label_id="Label_receipts")
+    Message.objects.filter(pk="a").update(labels=["INBOX", "Label_humans"])
+    inbox = Message.objects.inbox().count()
+
+    response = client.get("/")
+    counts = {tab["name"]: tab["count"] for tab in response.context["tabs"]}
+    assert counts == {"Humans": 1, "Receipts": 0}
+    assert response.context["inbox_count"] == inbox
+    assert response.context["others_count"] == inbox - 1
+    # Only empty tabs fade; their counts still show.
+    assert f'zero" data-tab-id="{empty.pk}"' in response.text
+    assert f'data-tab-id="{humans.pk}"' in response.text
+    assert f'zero" data-tab-id="{humans.pk}"' not in response.text
+
+
+@pytest.mark.parametrize("tab", ["label", "others", "all", "sender"])
+def test_archive_all_archives_every_inbox_email_gmail_lists_for_a_tab(
+    client, tmp_path, api, tab
+):
+    synced(client, tmp_path, api)
+    humans = Tab.objects.create(name="Humans", label_id="Label_humans")
+    api.mailbox["a"]["labelIds"] = ["INBOX", "Label_humans"]
+    tab_id = {"label": str(humans.pk), "others": "others"}.get(tab, "")
+    sender = "?sender=human%40example.com" if tab == "sender" else ""
+    # The list page offers the action with a confirmation naming the tab or sender.
+    page = client.get(sender or ("/?tab=" + tab_id if tab_id else "/")).text
+    named = {"label": "in Humans", "others": "in Others", "all": "in All"}
+    assert (
+        "Archive every inbox email " + named.get(tab, "from human@example.com") in page
+    )
+
+    api.messages.return_value.list.reset_mock()
+    response = client.post("/tabs/archive/" + sender, {"tab": tab_id, "next": "/"})
+    assert response.status_code == 303
+    listed = api.messages.return_value.list.call_args.kwargs
+    assert listed["maxResults"] == 500
+    assert listed["labelIds"] == (
+        ["INBOX", "Label_humans"] if tab == "label" else ["INBOX"]
+    )
+    # A sender page archives that sender's inbox mail.
+    if tab == "sender":
+        assert listed["q"] == 'from:"human@example.com"'
+    archived = api.messages.return_value.batchModify.call_args.kwargs["body"]
+    assert archived["removeLabelIds"] == ["INBOX"]
+    inbox = {"a", "b", "during"}
+    expected = {"label": {"a"}, "others": inbox - {"a"}}.get(tab, inbox)
+    assert set(archived["ids"]) == expected

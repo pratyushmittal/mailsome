@@ -35,11 +35,11 @@
       {% endif %}
     </header>
     <nav class="tabs" aria-label="Mail labels">
-      <a class="tab all-tab{% if not current_tab %} active{% endif %}" href="/">All</a>
+      <a class="tab all-tab{% if not current_tab %} active{% endif %}{% if not inbox_count %} zero{% endif %}" href="/">All <span class="tab-count">{{ inbox_count }}</span></a>
       {% for tab in tabs %}
-      <a class="tab{% if current_tab == tab.id|stringformat:'s' %} active{% endif %}" data-tab-id="{{ tab.id }}" data-tone="{{ tab.tone }}" href="{{ tab.url }}" draggable="true"><span class="tab-name">{{ tab.name }}</span></a>
+      <a class="tab{% if current_tab == tab.id|stringformat:'s' %} active{% endif %}{% if tab.count == 0 %} zero{% endif %}" data-tab-id="{{ tab.id }}" data-tone="{{ tab.tone }}" href="{{ tab.url }}" draggable="true"><span class="tab-name">{{ tab.name }}</span>{% if tab.count != None %} <span class="tab-count">{{ tab.count }}</span>{% endif %}</a>
       {% endfor %}
-      <a class="tab others-tab{% if current_tab == 'others' %} active{% endif %}" href="/?tab=others">✳ Others</a>
+      <a class="tab others-tab{% if current_tab == 'others' %} active{% endif %}{% if not others_count %} zero{% endif %}" href="/?tab=others">✳ Others <span class="tab-count">{{ others_count }}</span></a>
       <a class="add-tab" href="/tabs/new/?next={{ return_url|urlencode }}">+ Add</a>
     </nav>
     <main>{% block content %}{% endblock %}</main>

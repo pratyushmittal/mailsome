@@ -42,11 +42,13 @@ Tests use fake providers and temporary databases, not your mailbox.
 - **Message list:** a table of sender, subject with a text preview, date, and
   importance. **All** (the default) shows the whole inbox; a label tab shows inbox
   emails with that label; **Others** shows inbox emails outside your pinned tabs.
+  Each tab shows how many stored inbox emails it holds; empty tabs are faded.
   Newest-first lists come from Gmail; clicking another column header sorts stored
   inbox mail instead, so only mail the app has downloaded appears. Search and
   sender history cover all dates, including archived mail, in Gmail's order.
   Missing messages are downloaded and saved; cached ones are reused. Select rows
-  to archive just those emails together.
+  to archive just those emails together, or use **Archive all** (after a
+  confirmation) to archive every inbox email Gmail lists for the tab or sender.
 - **Account menu:** the button with your address name holds Compose, Refresh,
   Mail context, Settings, and the sync status.
 - **Individual message:** opening an email reuses saved content and fetches any
