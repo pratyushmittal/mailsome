@@ -28,8 +28,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .muted, .notice, .status { color: #776f7f; font-size: 12px; line-height: 1.6; }
 .error { color: #903e35; background: #fbefeb; border-radius: 5px; padding: 10px 12px; line-height: 1.6; font-size: 13px; overflow-wrap: anywhere; }
 .mail-app { max-width: 1240px; margin: 0 auto; padding: 26px 32px 60px; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 22px; padding-bottom: 12px; border-bottom: 1px solid #e9e0d8; }
-.tabs { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 3px 7px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #ded5e8 transparent; }
+.toolbar { display: flex; align-items: center; gap: 16px; }
+.tabs { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 14px; padding: 4px 3px 10px; border-bottom: 1px solid #e9e0d8; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #ded5e8 transparent; }
 /* Colors belong to stable tab IDs, not positions in the draggable list. */
 [data-tone="0"] { --accent: #7450b5; --tint: #f0eafa; --edge: #d8c9ee; }
 [data-tone="1"] { --accent: #b04d48; --tint: #fcece6; --edge: #f0c9bd; }
@@ -44,23 +44,40 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .others-tab { position: sticky; right: 0; z-index: 1; background: #eee7f7; }
 .add-tab { flex-shrink: 0; background: transparent; border: 1px dashed #d6cbdc; border-radius: 18px; padding: 6px 9px; min-height: 32px; color: #83708d; font-size: 12px; white-space: nowrap; }
 .add-tab:hover { color: var(--accent); background: var(--tint); }
-.toolbar-actions { display: flex; align-items: center; gap: 18px; flex-shrink: 0; white-space: nowrap; }
-.search-toggle { display: inline-flex; align-items: center; gap: 5px; }
+/* Compose, settings, and sync status live in the account menu to keep the header quiet. */
+.account-menu { position: relative; flex-shrink: 0; }
+.account-menu summary { list-style: none; padding: 9px 14px; border: 1px solid var(--edge); border-radius: 10px; background: #fffdfa; font-size: 13px; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.account-menu summary::after { content: " ▾"; color: #94889c; }
+.account-panel { position: absolute; right: 0; z-index: 2; display: grid; gap: 10px; min-width: 240px; margin-top: 6px; padding: 14px 16px; background: #fffdfa; border: 1px solid var(--edge); border-radius: 10px; box-shadow: 0 8px 24px rgb(60 40 30 / .12); font-size: 13px; }
+.account-panel form { margin: 0; }
+.account-panel .quiet { font-size: 13px; color: inherit; padding: 0; }
+.account-panel .sync-status { display: grid; gap: 4px; margin: 0; padding-top: 10px; border-top: 1px solid var(--edge); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .view-caption { display: flex; justify-content: space-between; align-items: center; min-height: 52px; gap: 12px; font-size: 12px; color: #81778a; }
 .view-caption strong { color: var(--accent); font-weight: 600; }
 .inbox { background: #fffdfa; border: 1px solid #e9e0d8; border-radius: 12px; overflow: hidden; box-shadow: 0 5px 22px #75644e05; }
-.mail { position: relative; display: block; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #f0e9e2; border-radius: 0; padding: 18px 24px; transition: background-color 120ms; }
-.mail:last-child { border-bottom: 0; }
-.mail.unread::before { content: ""; position: absolute; left: 10px; top: 26px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.mail:focus-visible { outline-offset: -3px; }
+/* Fixed layout keeps one line per row; long subjects and previews truncate. */
+.mail-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13px; }
+.mail-table th { padding: 10px 12px; border-bottom: 1px solid #e9e0d8; color: #81778a; font-size: 12px; font-weight: 500; text-align: left; white-space: nowrap; }
+.mail-table th a { color: inherit; text-decoration: none; }
+.mail-table th a:hover { color: var(--accent); }
+.mail-table td { padding: 11px 12px; border-bottom: 1px solid #f0e9e2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-table tbody tr:last-child td { border-bottom: 0; }
+.mail-table .select { width: 36px; padding-right: 0; }
+.mail-table .sender { width: 20%; color: #6c6274; }
+.mail-table .date { width: 96px; }
+.mail-table .importance { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+.mail-link { color: #897b90; text-decoration: none; }
+.subject-text { color: #4f4558; }
+.preview { margin-left: 6px; }
+.mail { cursor: pointer; transition: background-color 120ms; }
+.mail:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .mail:hover, .mail.highlighted { background: var(--tint); }
-.mail.highlighted { box-shadow: inset 3px 0 var(--accent); }
-.mail-top { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; margin-bottom: 7px; }
-.mail-title { display: flex; align-items: baseline; min-width: 0; }
-.subject { color: #6c6274; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
-.unread .subject { font-weight: 600; color: #393040; }
-.sender { display: block; font-size: 12px; color: #897b90; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail.highlighted td:first-child { box-shadow: inset 3px 0 var(--accent); }
+.unread .subject-text, .unread .sender { font-weight: 600; color: #393040; }
+.feed-mail .subject { color: #6c6274; font-size: 15px; }
+.feed-mail.unread .subject { font-weight: 600; color: #393040; }
 time { flex-shrink: 0; font-size: 11px; color: #95879c; }
 .empty { padding: 70px 20px; color: #8c9085; text-align: center; line-height: 1.7; }
 .empty h2 { font-size: 18px; font-weight: 500; color: #51594b; }
@@ -80,7 +97,7 @@ pre { font-family: inherit; font-size: 14px; line-height: 1.9; white-space: pre-
 .sidebar-note { color: #897b91; font-size: 10px; line-height: 1.6; margin: 20px 0; }
 .more-history { margin-top: 12px; }
 .filter-editor { max-width: 560px; margin: 24px auto; padding: 20px; background: #fffdfb; border: 1px solid var(--edge); border-radius: 12px; }
-.sync-status { margin: 18px 0; color: #776f7f; font-size: 12px; }
+.sync-status { color: #776f7f; font-size: 12px; }
 /* The OAuth setup shares typography without inheriting the inbox layout. */
 .setup { max-width: 850px; margin: auto; padding: 40px 30px; }
 .setup > p, .setup-steps p { line-height: 1.7; }
@@ -96,9 +113,8 @@ pre { font-family: inherit; font-size: 14px; line-height: 1.9; white-space: pre-
 .setup input[type="file"] { max-width: 100%; font: inherit; font-size: 13px; }
 @media (max-width: 700px) {
   .mail-app { padding: 16px 16px 40px; }
-  .toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
-  .toolbar-actions { justify-content: flex-end; gap: 20px; }
-  .toolbar-actions > .quiet { font-size: 11px; }
+  .mail-table .sender { width: 28%; }
+  .mail-table .importance { display: none; }
   .tabs { gap: 5px; width: 100%; }
   .tab, .add-tab { padding: 8px 11px; min-height: 36px; max-width: 160px; }
   .reader-grid { grid-template-columns: minmax(0, 1fr); }
@@ -108,7 +124,7 @@ pre { font-family: inherit; font-size: 14px; line-height: 1.9; white-space: pre-
   .setup { padding: 24px 20px; }
 }
 
-.mail-search { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 8px 10px 8px 16px; background: #fffdfa; border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 4px 18px #73518b08; }
+.mail-search { display: flex; flex: 1; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; background: #fffdfa; border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 4px 18px #73518b08; }
 .mail-search button[type="submit"] { background: var(--accent); border-color: var(--accent); color: white; font-size: 12px; white-space: nowrap; }
 .mail-search input { flex: 1; min-width: 0; width: 100%; border: 0; padding: 8px 0; background: transparent; color: #4d3d5b; font-size: 13px; }
 .label-reasons { border-top: 1px solid #dce0d3; padding-top: 18px; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -133,9 +149,7 @@ pre { font-family: inherit; font-size: 14px; line-height: 1.9; white-space: pre-
 
 /* Server-rendered pages share the existing compact list/reader design. */
 [hidden] { display: none !important; }
-a.mail { text-decoration: none; color: inherit; }
 a.tab, .add-tab { text-decoration: none; }
-.toolbar-actions form { margin: 0; }
 .form-panel, .settings-page { max-width: 760px; margin: 24px auto; }
 .form-panel { padding: 24px; background: #fffdf9; border: 1px solid var(--edge); border-radius: 12px; }
 .form-field { margin: 16px 0; }
@@ -154,7 +168,6 @@ a.tab, .add-tab { text-decoration: none; }
 .usage-entry small { display: block; overflow-wrap: anywhere; }
 .usage-line { display: flex; justify-content: space-between; gap: 16px; }
 @media (max-width: 600px) {
-  .toolbar-actions { gap: 12px; }
   .form-panel { padding: 16px; }
 }
 .tab[draggable="true"] { cursor: grab; }

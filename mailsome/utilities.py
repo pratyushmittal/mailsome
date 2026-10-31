@@ -80,6 +80,8 @@ def page(
         template,
         {
             "account": account,
+            # Gmail shares no display name; the address before @ labels the account menu.
+            "account_name": account["email"].split("@")[0] if account else "",
             "last_synced": datetime.fromtimestamp(synced_at / 1000, UTC)
             if synced_at
             else None,

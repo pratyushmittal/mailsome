@@ -53,28 +53,11 @@
     });
   }
 
-  function showSearch(show) {
-    const search = document.getElementById('mail-search'), toggle = document.querySelector('.search-toggle');
-    search.hidden = !show;
-    toggle?.setAttribute('aria-expanded', String(show));
-    if (show) search.querySelector('input[type="search"]')?.focus();
-    else toggle?.focus();
-  }
-
-  // A submitted search closes through its link, which reloads the unfiltered list.
+  // A submitted search clears through its link; an empty one just loses focus.
   function closeSearch() {
-    if (new URL(location.href).searchParams.has('q')) document.querySelector('[data-close-search]')?.click();
-    else showSearch(false);
-  }
-
-  function setupSearch() {
-    const search = document.getElementById('mail-search'), toggle = document.querySelector('.search-toggle');
-    // Pages without the search form have nothing to enhance.
-    if (!search) return;
-    // Without JavaScript the search form stays visible and works as a regular GET.
-    search.hidden = !search.querySelector('input[type="search"]').value;
-    toggle?.setAttribute('aria-expanded', String(!search.hidden));
-    toggle?.addEventListener('click', () => showSearch(search.hidden));
+    const clear = document.querySelector('[data-close-search]');
+    if (clear) clear.click();
+    else document.getElementById('search-query')?.blur();
   }
 
   function highlight(row, scroll = false) {
@@ -97,7 +80,7 @@
         row: document.querySelector('.mail.highlighted')?.id,
         scroll: window.scrollY,
         // Row order lets the reader continue to the next mail after archiving.
-        rows: [...document.querySelectorAll('.mail')].map(row => [row.id, row.getAttribute('href')]),
+        rows: [...document.querySelectorAll('.mail')].map(row => [row.id, row.querySelector('.mail-link').getAttribute('href')]),
       }));
     } catch { /* No persistent browser storage is required. */ }
   }
@@ -108,8 +91,30 @@
         document.querySelector('.mail.highlighted')?.classList.remove('highlighted');
         row.classList.add('highlighted');
       });
-      row.addEventListener('click', () => { highlight(row); savePosition(); });
+      row.addEventListener('click', event => {
+        highlight(row);
+        savePosition();
+        // The whole row opens the mail; its checkbox and link keep their own clicks.
+        if (!event.target.closest('input, a')) row.querySelector('.mail-link').click();
+      });
     });
+  }
+
+  // Show the archive button only while rows are selected.
+  function updateSelection() {
+    const selected = [...document.querySelectorAll('input[name="ids"]')].some(box => box.checked);
+    document.querySelector('[data-archive-selected]').hidden = !selected;
+  }
+
+  function setupSelection() {
+    const all = document.querySelector('[data-select-all]');
+    // Feed tabs and the reader have no selectable rows.
+    if (!all) return;
+    all.addEventListener('change', () => {
+      document.querySelectorAll('input[name="ids"]').forEach(box => { box.checked = all.checked; });
+      updateSelection();
+    });
+    document.querySelectorAll('input[name="ids"]').forEach(box => box.addEventListener('change', updateSelection));
   }
 
   // Reader backlinks include a row fragment. Restore exact scroll only for this same list/row.
@@ -280,25 +285,23 @@
     return true;
   }
 
-  // Escape closes a focused search, then returns from the reader, then closes an open search.
+  // Escape leaves the search box, clears a submitted search, or returns from the reader.
   function escapeKey(event, sequence) {
     if (event.key !== 'Escape') return false;
     sequence.set('');
-    const search = document.getElementById('mail-search'), back = document.querySelector('[data-back]');
-    if (search && !search.hidden && (event.target.closest('#mail-search') || !back)) {
+    const back = document.querySelector('[data-back]');
+    if (event.target.closest('#mail-search') || (!back && document.querySelector('[data-close-search]'))) {
       event.preventDefault();
       closeSearch();
     } else if (back) click(event, '[data-back]');
-    else if (event.target.closest('.tabs')) {
-      event.preventDefault();
-      document.querySelector('.search-toggle')?.focus();
-    }
     return true;
   }
 
   // Typing in fields keeps native keys and interrupts any key sequence.
   function fieldKey(event, sequence) {
-    if (!event.target.closest('input, textarea, select, form') && !event.target.isContentEditable) return false;
+    const field = event.target.closest('input, textarea, select, form');
+    // Checkboxes take no typing, so list shortcuts still work after clicking one.
+    if ((!field || field.type === 'checkbox') && !event.target.isContentEditable) return false;
     sequence.set('');
     return true;
   }
@@ -318,9 +321,31 @@
   }
 
   function searchKey(event) {
-    if (event.key !== '/' || !document.getElementById('mail-search')) return false;
+    const input = document.getElementById('search-query');
+    if (event.key !== '/' || !input) return false;
     event.preventDefault();
-    showSearch(true);
+    input.focus();
+    return true;
+  }
+
+  // In the list, x or Space toggles the highlighted row and d archives the selection.
+  function selectKey(event) {
+    if (!document.querySelector('[data-select-all]') || event.shiftKey || !['x', ' ', 'd'].includes(event.key)) return false;
+    // A focused checkbox toggles itself with Space.
+    if (event.key === ' ' && event.target.matches('input')) return false;
+    event.preventDefault();
+    const row = document.querySelector('.mail.highlighted');
+    const box = row?.querySelector('input[name="ids"]');
+    if (event.key !== 'd') {
+      // Nothing to toggle before a row is highlighted.
+      if (box) box.checked = !box.checked;
+      updateSelection();
+      return true;
+    }
+    const boxes = [...document.querySelectorAll('input[name="ids"]')];
+    // With nothing selected, d archives the highlighted row.
+    if (box && !boxes.some(item => item.checked)) box.checked = true;
+    if (boxes.some(item => item.checked)) document.getElementById('selection').requestSubmit();
     return true;
   }
 
@@ -398,7 +423,7 @@
     return true;
   }
 
-  const keyHandlers = [contextKey, editorKey, escapeKey, fieldKey, tabOrderKey, modifiedKey, searchKey, composeKey, feedKey, listKey, enterKey, readerKey, tabKey];
+  const keyHandlers = [contextKey, editorKey, escapeKey, fieldKey, tabOrderKey, modifiedKey, searchKey, composeKey, feedKey, selectKey, listKey, enterKey, readerKey, tabKey];
 
   function onKey(event, sequence) {
     if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || !(event.target instanceof Element)) return;
@@ -432,8 +457,8 @@
 
   function main() {
     loadFragments();
-    setupSearch();
     setupRows();
+    setupSelection();
     restorePosition();
     setupReader();
     setupSendForms();

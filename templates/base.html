@@ -11,34 +11,37 @@
 <body>
   <div class="mail-app"{% if selected_tab %} data-tone="{{ selected_tab.tone }}"{% endif %}>
     <header class="toolbar">
-      <nav class="tabs" aria-label="Mail labels">
-        {% for tab in tabs %}
-        <a class="tab{% if current_tab == tab.id|stringformat:'s' %} active{% endif %}" data-tab-id="{{ tab.id }}" data-tone="{{ tab.tone }}" href="{{ tab.url }}" draggable="true"><span class="tab-name">{{ tab.name }}</span></a>
-        {% endfor %}
-        <a class="tab others-tab{% if not current_tab %} active{% endif %}" href="/" id="others-tab">✳ Others</a>
-        <a class="add-tab" href="/tabs/new/?next={{ return_url|urlencode }}">+ Add</a>
-      </nav>
-      <div class="toolbar-actions">
-        <button type="button" class="quiet search-toggle" aria-controls="mail-search" aria-expanded="true">Search</button>
-        {% if account %}<a class="quiet" href="{% url 'compose' %}?next={{ return_url|urlencode }}" data-compose aria-keyshortcuts="C" title="New message (c)">Compose</a>{% endif %}
-        {% if account %}<form method="post" action="/refresh/" data-refresh>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><button class="quiet">Refresh</button></form>{% endif %}
-        <a class="quiet" href="{% url 'user_context' %}?next={{ return_url|urlencode }}" data-user-context aria-keyshortcuts="Alt+Shift+C" title="Edit mail context (Alt+Shift+C)">Mail context</a>
-        <a class="quiet" href="/settings/?next={{ return_url|urlencode }}">Settings</a>
-      </div>
+      <form id="mail-search" class="mail-search" method="get" action="/" role="search">
+        <label class="sr-only" for="search-query">Search Gmail</label>
+        <input id="search-query" type="search" name="q" value="{{ request.GET.q }}" placeholder="Search Gmail with Gmail syntax" autocomplete="off" aria-keyshortcuts="/">
+        {% if current_tab %}<input type="hidden" name="tab" value="{{ current_tab }}">{% endif %}
+        <button type="submit">Search</button>{% if request.GET.q %}<a class="quiet" href="{% if current_tab %}/?tab={{ current_tab|urlencode }}{% else %}/{% endif %}" data-close-search>Clear</a>{% endif %}
+      </form>
+      {% if account %}
+      <details class="account-menu">
+        <summary>{{ account_name }}</summary>
+        <div class="account-panel">
+          <a href="{% url 'compose' %}?next={{ return_url|urlencode }}" data-compose aria-keyshortcuts="C" title="New message (c)">Compose</a>
+          <form method="post" action="/refresh/" data-refresh>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"><button class="quiet">Refresh</button></form>
+          <a href="{% url 'user_context' %}?next={{ return_url|urlencode }}" data-user-context aria-keyshortcuts="Alt+Shift+C" title="Edit mail context (Alt+Shift+C)">Mail context</a>
+          <a href="/settings/?next={{ return_url|urlencode }}">Settings</a>
+          <section class="sync-status" data-sync-status data-interval="{{ sync_interval_ms }}" role="status">
+            <span>Last synced: <time data-last-synced>{% if last_synced %}{{ last_synced|date:"d M Y, H:i:s T" }}{% else %}Not yet{% endif %}</time></span>
+            <span>Awaiting classification: <span data-classifications-due>{{ classifications_due }}</span></span>
+            <a href="{{ return_url }}">Reload mail</a>
+          </section>
+        </div>
+      </details>
+      {% endif %}
     </header>
-    <form id="mail-search" class="mail-search" method="get" action="/" role="search">
-      <label class="sr-only" for="search-query">Search Gmail</label>
-      <input id="search-query" type="search" name="q" value="{{ request.GET.q }}" placeholder="Search Gmail with Gmail syntax" autocomplete="off">
-      {% if current_tab %}<input type="hidden" name="tab" value="{{ current_tab }}">{% endif %}
-      <button type="submit">Search</button><a class="quiet" href="{% if current_tab %}/?tab={{ current_tab|urlencode }}{% else %}/{% endif %}" data-close-search>Close</a>
-    </form>
-    {% if account %}
-    <section class="sync-status" data-sync-status data-interval="{{ sync_interval_ms }}" role="status">
-      <span>Last synced: <time data-last-synced>{% if last_synced %}{{ last_synced|date:"d M Y, H:i:s T" }}{% else %}Not yet{% endif %}</time></span>
-      <span>Awaiting classification: <span data-classifications-due>{{ classifications_due }}</span></span>
-      <a class="quiet" href="{{ return_url }}">Reload mail</a>
-    </section>
-    {% endif %}
+    <nav class="tabs" aria-label="Mail labels">
+      <a class="tab all-tab{% if not current_tab %} active{% endif %}" href="/">All</a>
+      {% for tab in tabs %}
+      <a class="tab{% if current_tab == tab.id|stringformat:'s' %} active{% endif %}" data-tab-id="{{ tab.id }}" data-tone="{{ tab.tone }}" href="{{ tab.url }}" draggable="true"><span class="tab-name">{{ tab.name }}</span></a>
+      {% endfor %}
+      <a class="tab others-tab{% if current_tab == 'others' %} active{% endif %}" href="/?tab=others">✳ Others</a>
+      <a class="add-tab" href="/tabs/new/?next={{ return_url|urlencode }}">+ Add</a>
+    </nav>
     <main>{% block content %}{% endblock %}</main>
     <form method="post" action="/tabs/order/" id="tab-order-form" hidden>{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"></form>
   </div>

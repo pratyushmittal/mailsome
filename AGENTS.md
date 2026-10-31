@@ -24,6 +24,7 @@ and leave feature descriptions and implementation walkthroughs in README or code
 - Label writes request history sync; never edit cached labels directly. Sender writes never acknowledge AI decisions; the AI path acknowledges only its own writes, writing even labels the cache shows (it can lag). Resets remove labels and rely on sync; no confirmation reads.
 - Render email bodies only as sandboxed documents in frames (no scripts; `allow-same-origin` just for sizing), keeping the email's own `<style>` and classes. Never inline email HTML into app pages.
 - Sends never retry automatically; a duplicate email is worse than a failed send that keeps its draft.
+- List sorting: newest-first pages come from Gmail; other column sorts read stored inbox mail only, paged locally. Searches and sender history stay in Gmail's order.
 - Download batches ≤50; retry at most twice for 500/502/503/504, 429, or 403 rateLimitExceeded/userRateLimitExceeded. No transport/DNS/SSL retries.
 - Accept incomplete rows after interrupted initial saves; no special body-repair reads. Cursor replay or reloading browsing results provides recovery.
 

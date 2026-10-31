@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import pickle
+import re
 from collections.abc import Callable
 from email.utils import getaddresses, parseaddr
 from typing import TYPE_CHECKING, Any
@@ -14,7 +15,8 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.core.cache import caches
 from django.db import IntegrityError
-from django.db.models import Max
+from django.db.models import F, Max
+from django.db.models.functions import Substr
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
 from django.utils.http import content_disposition_header
@@ -42,74 +44,177 @@ from jobs.pipeline import sync_requested
 from mailsome.errors import APIError, gmail_denial
 from mailsome.utilities import page, redirect_next, safe_next
 
+# Column: title, first-click order (a second click reverses it), and stored field.
+SORT_COLUMNS = {
+    "sender": ("Sender", "sender", "sender"),
+    "subject": ("Mail", "subject", "subject"),
+    "date": ("Date", "-date", "received_at"),
+    "importance": ("Importance", "-importance", "importance"),
+}
+PAGE_SIZE = 50
+
 
 @require_http_methods(["GET"])
 def inbox(request: HttpRequest) -> HttpResponse:
     # A disconnected installation renders safely without evaluating saved Gmail queries.
     if not Account.objects.filter(pk=1).exists():
         return page(request, "inbox/list.html", {"messages": []})
-    importance_threshold = classification_utils.settings()["importance_threshold"]
-    # Sender searches use the same message store as tab browsing.
+    # Sender history and searches stay in Gmail's order; other sorts use stored mail.
+    sortable = not request.GET.get("sender") and not request.GET.get("q", "").strip()
     if request.GET.get("sender"):
         context = sender_context(request)
+    elif sortable and request.GET.get("sort"):
+        context = sorted_page(request)
     else:
-        query = request.GET.get("q", "").strip()
-        tab_id = request.GET.get("tab")
-        configured = list(Tab.objects.all())
-        labels = [] if query else ["INBOX"]
-        with gmail.service() as client:
-            if not query and tab_id:
-                tab = next((tab for tab in configured if str(tab.pk) == tab_id), None)
-                # Pins may be removed in another browser while their URL is still open.
-                if tab is None:
-                    raise APIError(
-                        404, "This label tab no longer exists. Select Others."
-                    )
-                if tab.label_id:
-                    labels.append(tab.label_id)
-                else:
-                    query = tab.query
-            elif not query:
-                # Gmail queries exclude by name; resolve current names so external renames stay correct.
-                names = (
-                    {label["id"]: label["name"] for label in gmail.list_labels(client)}
-                    if configured
-                    else {}
-                )
-                query = " ".join(
-                    f"-label:{json.dumps(names[tab.label_id])}"
-                    if tab.label_id in names
-                    else f"-({tab.query})"
-                    if tab.query
-                    else ""
-                    for tab in configured
-                )
-            try:
-                result = gmail.get_message_page(
-                    client,
-                    query=query,
-                    labels=labels,
-                    page_token=request.GET.get("page"),
-                )
-                messages = gmail.get_messages_for_list(
-                    client, [item["id"] for item in result.get("messages", [])]
-                )
-            except HttpError as error:
-                # Bad search syntax or an expired page token needs a fresh page, not local fallback results.
-                if error.resp.status == 400:
-                    raise APIError(
-                        400,
-                        "Gmail could not run this search or page. Check the query or return to the first page.",
-                    ) from None
-                raise
-        add_message_urls(request, messages)
-        context = {
-            "messages": messages,
-            "query": request.GET.get("q", ""),
-            **_pagination(request, result.get("nextPageToken")),
-        }
-    context["importance_threshold"] = importance_threshold
+        context = gmail_page(request)
+    add_previews(context["messages"])
+    context["headers"] = table_headers(request, sortable)
+    context["importance_threshold"] = classification_utils.settings()[
+        "importance_threshold"
+    ]
     return page(request, "inbox/list.html", context)
+
+
+def find_tab(configured: list[Tab], tab_id: str) -> Tab:
+    tab = next((tab for tab in configured if str(tab.pk) == tab_id), None)
+    # Pins may be removed in another browser while their URL is still open.
+    if tab is None:
+        raise APIError(404, "This label tab no longer exists. Select All.")
+    return tab
+
+
+def gmail_page(request: HttpRequest) -> dict[str, Any]:
+    """List one Gmail page: All, Others, a label tab, or a search, newest first."""
+    query = request.GET.get("q", "").strip()
+    tab_id = request.GET.get("tab")
+    configured = list(Tab.objects.all())
+    labels = [] if query else ["INBOX"]
+    with gmail.service() as client:
+        if not query and tab_id == "others":
+            # Gmail queries exclude by name; resolve current names so external renames stay correct.
+            names = (
+                {label["id"]: label["name"] for label in gmail.list_labels(client)}
+                if configured
+                else {}
+            )
+            query = " ".join(
+                f"-label:{json.dumps(names[tab.label_id])}"
+                if tab.label_id in names
+                else f"-({tab.query})"
+                if tab.query
+                else ""
+                for tab in configured
+            )
+        elif not query and tab_id:
+            tab = find_tab(configured, tab_id)
+            if tab.label_id:
+                labels.append(tab.label_id)
+            else:
+                query = tab.query
+        try:
+            result = gmail.get_message_page(
+                client, query=query, labels=labels, page_token=request.GET.get("page")
+            )
+            messages = gmail.get_messages_for_list(
+                client, [item["id"] for item in result.get("messages", [])]
+            )
+        except HttpError as error:
+            # Bad search syntax or an expired page token needs a fresh page, not local fallback results.
+            if error.resp.status == 400:
+                raise APIError(
+                    400,
+                    "Gmail could not run this search or page. Check the query or return to the first page.",
+                ) from None
+            raise
+    add_message_urls(request, messages)
+    return {
+        "messages": messages,
+        "query": request.GET.get("q", ""),
+        **_pagination(request, result.get("nextPageToken")),
+    }
+
+
+def sorted_page(request: HttpRequest) -> dict[str, Any]:
+    """Sort stored inbox mail locally; only mail the app has downloaded appears."""
+    sort = request.GET["sort"]
+    # Sort links only offer known columns; hand-edited URLs get a clear error.
+    if sort.removeprefix("-") not in SORT_COLUMNS:
+        raise APIError(400, "Choose a column to sort by.")
+    field = SORT_COLUMNS[sort.removeprefix("-")][2]
+    tab_id = request.GET.get("tab")
+    messages = Message.objects.inbox().defer("body", "rich_body")
+    if tab_id == "others":
+        # Legacy query tabs need Gmail's search engine; locally only labels are excluded.
+        for tab in Tab.objects.exclude(label_id=None):
+            messages = messages.exclude(labels__icontains=f'"{tab.label_id}"')
+    elif tab_id:
+        tab = find_tab(list(Tab.objects.all()), tab_id)
+        # Legacy query tabs need Gmail's search engine.
+        if not tab.label_id:
+            raise APIError(400, "Sorting needs a Gmail label tab, not a saved search.")
+        messages = messages.filter(labels__icontains=f'"{tab.label_id}"')
+    order = (
+        F(field).desc(nulls_last=True)
+        if sort.startswith("-")
+        else F(field).asc(nulls_last=True)
+    )
+    number = int(request.GET["page"]) if request.GET.get("page", "").isdigit() else 1
+    # One extra row tells whether another page exists.
+    rows = list(
+        messages.order_by(order, "-received_at")[
+            (number - 1) * PAGE_SIZE : number * PAGE_SIZE + 1
+        ]
+    )
+    add_message_urls(request, rows[:PAGE_SIZE])
+    return {
+        "messages": rows[:PAGE_SIZE],
+        "query": "",
+        **_pagination(request, str(number + 1) if len(rows) > PAGE_SIZE else None),
+    }
+
+
+def table_headers(request: HttpRequest, sortable: bool) -> list[dict[str, str]]:
+    """Column headers; sortable ones link to their next order, the active one reverses."""
+    current = request.GET.get("sort") or "-date"
+    headers = []
+    for column, (title, first, _field) in SORT_COLUMNS.items():
+        active = current.removeprefix("-") == column
+        order = current.removeprefix("-") if current.startswith("-") else "-" + current
+        order = order if active else first
+        params = {"tab": request.GET["tab"]} if request.GET.get("tab") else {}
+        # Newest first is Gmail's own order, so it needs no local sort.
+        if order != "-date":
+            params["sort"] = order
+        headers.append(
+            {
+                "column": column,
+                "title": title,
+                "url": ("/?" + urlencode(params) if params else "/")
+                if sortable
+                else "",
+                "arrow": ("↓" if current.startswith("-") else "↑")
+                if active and sortable
+                else "",
+            }
+        )
+    return headers
+
+
+def add_previews(messages: list[Message]) -> None:
+    """Set a one-line text preview on listed mail; one query, bodies stay deferred."""
+    previews = dict(
+        Message.objects.filter(pk__in=[message.id for message in messages])
+        .annotate(start=Substr("body", 1, 300))
+        .values_list("id", "start")
+    )
+    for message in messages:
+        text = previews.get(message.id) or ""
+        # Stored text of HTML mail keeps Markdown links and images; show only their words.
+        for _nested in range(2):
+            text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        # Divider lines and emphasis markers are noise in a one-line preview.
+        text = re.sub(r"[*#_=|>~-]{2,}", " ", text)
+        message.preview = " ".join(text.split())
 
 
 def _pagination(request: HttpRequest, next_page: str | None) -> dict[str, str]:
@@ -889,6 +994,35 @@ def mark_done(request: HttpRequest, message_id: str) -> HttpResponse:
         gmail.remove_labels_from_message(client, message_id, ["UNREAD", "INBOX"])
     sync_requested.set()
     return HttpResponse(status=204)
+
+
+@require_http_methods(["POST"])
+def archive_selected(request: HttpRequest) -> HttpResponse:
+    """Archive the selected list rows: only those emails, not whole conversations."""
+    message_ids = request.POST.getlist("ids")
+    try:
+        require_label_access()
+        # Pressing Archive with nothing selected changes nothing.
+        if message_ids:
+            with gmail.service() as client:
+                gmail.remove_label_from_messages(client, message_ids, "INBOX")
+            sync_requested.set()
+            # Reopened conversations should show their new labels.
+            for thread_id in set(
+                Message.objects.filter(pk__in=message_ids).values_list(
+                    "thread_id", flat=True
+                )
+            ):
+                caches["reader"].delete(reader_key("thread", thread_id))
+    except (APIError, HttpError, RefreshError, OSError) as error:
+        status, detail = operation_error(error)
+        return page(
+            request,
+            "inbox/action_error.html",
+            {"detail": detail, "action_url": request.get_full_path()},
+            status=status,
+        )
+    return redirect_next(request)
 
 
 @require_http_methods(["POST"])

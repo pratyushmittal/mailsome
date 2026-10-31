@@ -5,7 +5,8 @@
 <section class="empty"><h1>Connect your Gmail inbox</h1><a href="/auth/connect">Connect Gmail</a></section>
 {% else %}
 <div class="view-caption">
-  <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% elif selected_tab %}{{ selected_tab.name }}{% else %}Others{% endif %}</strong> · {{ messages|length }} emails</span>
+  <span><strong>{% if sender %}Mail from {{ sender }}{% elif query %}Search results{% elif selected_tab %}{{ selected_tab.name }}{% elif current_tab == 'others' %}Others{% else %}All{% endif %}</strong> · {{ messages|length }} emails</span>
+  <button type="submit" form="selection" data-archive-selected hidden aria-keyshortcuts="D">Archive selected</button>
   {% if sender %}<a href="/">Back to inbox</a>{% elif selected_tab %}<a href="{% url 'tab_edit' selected_tab.id %}?next={{ return_url|urlencode }}">Edit label</a>{% endif %}
 </div>
 {# Feed tabs show whole emails; searches inside them stay ordinary lists. #}
@@ -22,19 +23,32 @@
   {% empty %}<p class="empty">No messages here.</p>{% endfor %}
 </div>
 {% else %}
-<div class="mail-list inbox">
-  {% for message in messages %}
-  <a class="mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" href="{{ message.url }}" data-message-id="{{ message.id }}">
-    <span class="mail-top"><span class="mail-title"><span class="subject">{{ message.subject|default:"(No subject)" }} {% include "includes/attachment_badge.html" with count=message.attachment_count %}</span>{% if message.importance > importance_threshold %}<span class="importance-badge">Important</span>{% endif %}</span><time datetime="{{ message.date|date:'c' }}" title="{{ message.date|date:'M j, Y, H:i T' }}">{{ message.date|date:"M j, H:i" }}</time></span>
-    <span class="sender">{{ message.sender }}</span>
-  </a>
-  {% empty %}<p class="empty">No messages here.</p>{% endfor %}
-</div>
+{# Checkboxes join this form by id, so rows stay outside it and keep list shortcuts. #}
+<form id="selection" method="post" action="{% url 'archive_selected' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}"></form>
+<table class="mail-table inbox">
+    <thead><tr>
+      <th class="select"><input type="checkbox" data-select-all aria-label="Select all"></th>
+      {% for header in headers %}
+      <th class="{{ header.column }}">{% if header.url %}<a href="{{ header.url }}">{{ header.title }} {{ header.arrow }}</a>{% else %}{{ header.title }}{% endif %}</th>
+      {% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for message in messages %}
+      <tr class="mail{% if 'UNREAD' in message.labels %} unread{% endif %}" id="mail-{{ message.id }}" tabindex="-1">
+        <td class="select"><input type="checkbox" form="selection" name="ids" value="{{ message.id }}" aria-label="Select"></td>
+        <td class="sender" title="{{ message.sender }}">{{ message.sender_name }}</td>
+        <td class="subject"><a class="mail-link" href="{{ message.url }}"><span class="subject-text">{{ message.subject|default:"(No subject)" }}</span>{% include "includes/attachment_badge.html" with count=message.attachment_count %} <span class="preview">{{ message.preview }}</span></a></td>
+        <td class="date"><time datetime="{{ message.date|date:'c' }}" title="{{ message.date|date:'M j, Y, H:i T' }}">{{ message.date|date:"M j, H:i" }}</time></td>
+        <td class="importance">{% if message.importance != None %}<span{% if message.importance > importance_threshold %} class="importance-badge" title="Important"{% endif %}>{{ message.importance|floatformat:2 }}</span>{% endif %}</td>
+      </tr>
+      {% empty %}<tr><td colspan="5" class="empty">No messages here.</td></tr>{% endfor %}
+    </tbody>
+</table>
 {% endif %}
 {% if previous_url or next_url %}
 <nav class="pagination" aria-label="Message pages">
   {% if previous_url %}<a href="{{ previous_url }}">First page</a>{% endif %}
-  {% if next_url %}<a href="{{ next_url }}">Older messages</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">Next page</a>{% endif %}
 </nav>
 {% endif %}
 {% endif %}

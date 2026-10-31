@@ -39,10 +39,16 @@ Tests use fake providers and temporary databases, not your mailbox.
 
 - **Connect Gmail:** save a history cursor, which marks where to start checking
   for changes. This does not preload existing emails.
-- **Message list:** selecting a tab asks Gmail for inbox emails with that label.
-  **Others** shows inbox emails outside your pinned tabs. Search and sender
-  history cover all dates, including archived mail. **Load more** fetches the
-  next page. Missing messages are downloaded and saved; cached ones are reused.
+- **Message list:** a table of sender, subject with a text preview, date, and
+  importance. **All** (the default) shows the whole inbox; a label tab shows inbox
+  emails with that label; **Others** shows inbox emails outside your pinned tabs.
+  Newest-first lists come from Gmail; clicking another column header sorts stored
+  inbox mail instead, so only mail the app has downloaded appears. Search and
+  sender history cover all dates, including archived mail, in Gmail's order.
+  Missing messages are downloaded and saved; cached ones are reused. Select rows
+  to archive just those emails together.
+- **Account menu:** the button with your address name holds Compose, Refresh,
+  Mail context, Settings, and the sync status.
 - **Individual message:** opening an email reuses saved content and fetches any
   missing content and thread details needed for the view. Full-detail downloads
   save current labels, headers, text, and formatted content. Attachments download
@@ -127,9 +133,11 @@ On Settings or the context editor, it focuses the existing field without discard
 | Any app page | `Alt+Shift+C` | Edit mail context |
 | Inbox/reader | `Tab` / `Shift+Tab` | Cycle label tabs |
 | Inbox/reader | `1`–`9` | Jump to a tab by position |
-| Inbox/reader | `/` | Open search |
+| Inbox/reader | `/` | Focus search; `Escape` leaves it or clears a submitted search |
 | Inbox/reader | `c` | Compose a new email |
 | Mail list | `j` / `k`, `Enter` | Select next/previous mail, then open |
+| Mail list | `x` / `Space` | Select or unselect the highlighted mail |
+| Mail list | `d` | Archive the selected mail (or the highlighted one); conversations stay |
 | Feed tab | `j` / `k` | Scroll to the next/previous email; mark the one you leave read and archive it |
 | Reader | `Escape` | Return to the list and restore position |
 | Reader | `d` | Archive the entire thread and open the next mail in the list; do not mark it read |

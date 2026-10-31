@@ -300,7 +300,7 @@ def pinned_others_exclusions(client, tmp_path, api, legacy):
 
 @when("I open Others", target_fixture="open_others")
 def open_others(client, api):
-    assert client.get("/").status_code == 200
+    assert client.get("/?tab=others").status_code == 200
     request = api.messages.return_value.list.call_args.kwargs
     return request
 
@@ -320,7 +320,7 @@ def unpin_and_reopen_others(client, pinned_others_exclusions):
         client.post(f"/tabs/{human.pk}/edit/", data={"action": "delete"}).status_code
         == 303
     )
-    assert client.get("/").status_code == 200
+    assert client.get("/?tab=others").status_code == 200
 
 
 @then("the removed tab no longer contributes an exclusion")
@@ -1258,3 +1258,83 @@ def test_feed_tab_shows_full_mail_and_marks_focused_mail_done(client, tmp_path, 
     )
     assert pipeline.sync_requested.is_set()
     assert "UNREAD" in Message.objects.get(pk="a").labels
+
+
+def test_all_lists_the_inbox_and_columns_sort_stored_mail(
+    client, tmp_path, api, monkeypatch
+):
+    synced(client, tmp_path, api)
+    tab = Tab.objects.create(name="Humans", label_id="Label_humans")
+    for message_id, importance, labels in [
+        ("a", 0.2, ["INBOX", tab.label_id]),
+        ("b", 0.9, ["INBOX"]),
+        ("during", None, ["INBOX"]),
+    ]:
+        Message.objects.filter(pk=message_id).update(
+            importance=importance,
+            labels=labels,
+            body=f"  Body\n of [![logo](https://x/y.png)](https://x) {message_id} =====",
+        )
+
+    # All is Gmail's whole inbox, newest first, with one-line previews.
+    response = client.get("/")
+    request = api.messages.return_value.list.call_args.kwargs
+    assert (request["labelIds"], request["q"]) == (["INBOX"], "")
+    # Markdown links, images, and divider lines shrink to their words.
+    previews = {message.id: message.preview for message in response.context["messages"]}
+    assert previews["a"] == "Body of logo a"
+    headers = {header["column"]: header for header in response.context["headers"]}
+    assert headers["date"]["arrow"] == "↓"
+    assert headers["importance"]["url"] == "/?sort=-importance"
+
+    # Other sorts use stored inbox mail; unscored mail comes last either way.
+    api.messages.return_value.list.reset_mock()
+    ordered = client.get("/?sort=-importance").context
+    assert [message.id for message in ordered["messages"]] == ["b", "a", "during"]
+    assert [m.id for m in client.get("/?sort=importance").context["messages"]] == [
+        "a",
+        "b",
+        "during",
+    ]
+    api.messages.return_value.list.assert_not_called()
+    headers = {header["column"]: header for header in ordered["headers"]}
+    assert headers["importance"] == {
+        "column": "importance",
+        "title": "Importance",
+        "url": "/?sort=importance",
+        "arrow": "↓",
+    }
+    # Newest first is Gmail's order again, so the Date link drops the local sort.
+    assert headers["date"]["url"] == "/"
+
+    # Label tabs and Others filter stored mail by label; pages continue locally.
+    sorted_tab = client.get(f"/?tab={tab.pk}&sort=-importance").context
+    assert [message.id for message in sorted_tab["messages"]] == ["a"]
+    others = client.get("/?tab=others&sort=-importance").context
+    assert [message.id for message in others["messages"]] == ["b", "during"]
+    monkeypatch.setattr(app, "PAGE_SIZE", 2)
+    first = client.get("/?sort=-importance").context
+    assert first["next_url"] == "/?sort=-importance&page=2"
+    second = client.get(first["next_url"]).context
+    assert [message.id for message in second["messages"]] == ["during"]
+    assert not second["next_url"]
+
+    # Searches stay in Gmail's order, so their headers do not sort.
+    searched = client.get("/?q=hello").context
+    assert all(not header["url"] for header in searched["headers"])
+    assert client.get("/?sort=unknown").status_code == 400
+
+
+def test_archive_selected_archives_only_the_chosen_emails(client, tmp_path, api):
+    synced(client, tmp_path, api)
+    pipeline.sync_requested.clear()
+    response = client.post("/messages/archive/", {"ids": ["a", "b"], "next": "/"})
+    assert response.status_code == 303 and response["Location"] == "/"
+    api.messages.return_value.batchModify.assert_called_once_with(
+        userId="me", body={"ids": ["a", "b"], "removeLabelIds": ["INBOX"]}
+    )
+    assert pipeline.sync_requested.is_set()
+    # Archive with nothing selected changes nothing.
+    api.messages.return_value.batchModify.reset_mock()
+    assert client.post("/messages/archive/", {"next": "/"}).status_code == 303
+    api.messages.return_value.batchModify.assert_not_called()

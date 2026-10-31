@@ -29,18 +29,19 @@ client = client_fixture
 
 def test_tab_keyboard_order_search_and_native_navigation(mail_keyboard) -> None:
     mail_keyboard("""
+        // All comes first and Others last; number keys follow that order.
         press('Tab'); assert.equal(navigations.at(-1), '/?tab=2');
         press('Tab', document, {shiftKey: true}); assert.equal(navigations.at(-1), '/');
-        press('3'); assert.equal(navigations.at(-1), '/');
-        press('2'); assert.equal(navigations.at(-1), '/?tab=2');
+        press('4'); assert.equal(navigations.at(-1), '/?tab=others');
+        press('2'); assert.equal(navigations.at(-1), '/?tab=1');
         assert(!press('Tab', new Element('button')).defaultPrevented);
         assert(!press('1', new Element('input')).defaultPrevented);
-        tabs[0].focus(); press('Escape'); assert.equal(document.activeElement, searchToggle);
-        press('/'); assert(!search.hidden); assert.equal(document.activeElement, searchInput);
-        press('Escape'); assert(search.hidden); assert.equal(document.activeElement, searchToggle);
+        // The search box is always visible: / focuses it and Escape leaves it.
+        press('/'); assert.equal(document.activeElement, searchInput);
+        press('Escape', searchInput); assert.equal(document.activeElement, document);
         boot({url: 'http://localhost:8002/?q=hello'});
         searchInput.focus(); press('Escape'); assert.equal(navigations.at(-1), '/');
-        boot(); press('ArrowRight', tabs[0], {altKey: true});
+        boot(); press('ArrowRight', tabs[1], {altKey: true});
         const order = document.getElementById('tab-order-form');
         assert(order.submitted); assert.deepEqual(order.children.map(input => input.value), ['2', '1']);
     """)
@@ -379,6 +380,29 @@ def test_feed_j_k_scroll_to_mail_and_mark_the_mail_left_done(mail_keyboard):
     """)
 
 
+def test_list_selection_toggles_with_x_or_space_and_d_archives(mail_keyboard):
+    mail_keyboard("""
+        const box = id => rows.get('mail-' + id).querySelector('input[name="ids"]');
+        const button = () => document.querySelector('[data-archive-selected]');
+        press('j'); press('x'); assert(box('a').checked); assert(!button().hidden);
+        press('j'); press(' '); assert(box('b').checked);
+        press('x'); assert(!box('b').checked);
+        press('d'); assert(document.getElementById('selection').submitted);
+        // With nothing selected, d archives the highlighted row.
+        boot(); press('j'); press('j'); press('d');
+        assert(box('b').checked && !box('a').checked); assert(document.getElementById('selection').submitted);
+        // Select all checks every row; a focused checkbox keeps Space, and j/k still move.
+        boot();
+        const all = document.querySelector('[data-select-all]');
+        all.checked = true; all.dispatch('change');
+        assert(['a', 'b', 'c'].every(id => box(id).checked)); assert(!button().hidden);
+        assert(!press(' ', box('a')).defaultPrevented);
+        press('j', box('a')); assert.equal(highlighted(), 'mail-a');
+        // Clicking a row outside its checkbox and link opens the mail.
+        rows.get('mail-c').click(); assert.equal(navigations.at(-1), '/messages/c/');
+    """)
+
+
 def test_context_shortcut_opens_editor_or_focuses_existing_draft(mail_keyboard):
     mail_keyboard("""
         boot({reading: true});
@@ -439,12 +463,12 @@ def mail_keyboard():
         // Tests run due timers explicitly; clearTimeout marks one cancelled.
         global.setTimeout = (callback, delay) => timers.push({callback, delay});
         global.clearTimeout = id => { if (timers[id - 1]) timers[id - 1].cleared = true; };
-        let document, rows, tabs, reader, editor, back, cancel, search, searchInput, searchToggle;
+        let document, rows, tabs, reader, editor, back, cancel, searchInput;
         class Element {
             constructor(tag = 'div', attrs = {}) {
                 this.tagName = tag.toUpperCase(); this.attrs = attrs; this.children = [];
                 this.listeners = {}; this.hidden = false; this.dataset = {}; this.style = {};
-                this.value = attrs.value || ''; this.id = attrs.id || '';
+                this.value = attrs.value || ''; this.id = attrs.id || ''; this.type = attrs.type || '';
                 this.classes = new Set((attrs.class || '').split(' ').filter(Boolean));
                 this.classList = {add: name => this.classes.add(name), remove: name => this.classes.delete(name), contains: name => this.classes.has(name)};
                 for (const [key, value] of Object.entries(attrs)) if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
@@ -476,10 +500,11 @@ def mail_keyboard():
             setAttribute(key, value) { this.attrs[key] = value; }
             getAttribute(key) { return this.attrs[key] ?? null; }
             focus() { document.activeElement = this; this.dispatch('focus'); }
+            blur() { document.activeElement = document; }
             scrollIntoView() { this.scrolled = true; }
             click() {
                 this.clicked = true;
-                const event = {preventDefault() { this.defaultPrevented = true; }};
+                const event = {target: this, preventDefault() { this.defaultPrevented = true; }};
                 this.dispatch('click', event);
                 if (this.attrs.href && !event.defaultPrevented) navigations.push(this.attrs.href);
             }
@@ -512,17 +537,25 @@ def mail_keyboard():
             document.getElementById = id => document.querySelector('#' + id);
             document.createElement = tag => new Element(tag);
             const strip = new Element('nav', {class: 'tabs'});
-            tabs = [new Element('a', {class: 'tab active', 'data-tab-id': '1', href: '/?tab=1'}), new Element('a', {class: 'tab', 'data-tab-id': '2', href: '/?tab=2'}), new Element('a', {class: 'tab', href: '/'})];
+            tabs = [new Element('a', {class: 'tab', href: '/'}), new Element('a', {class: 'tab active', 'data-tab-id': '1', href: '/?tab=1'}), new Element('a', {class: 'tab', 'data-tab-id': '2', href: '/?tab=2'}), new Element('a', {class: 'tab', href: '/?tab=others'})];
             strip.append(...tabs); document.append(strip);
-            searchToggle = new Element('button', {class: 'search-toggle'});
-            search = new Element('form', {id: 'mail-search'});
-            searchInput = new Element('input', {type: 'search', value: location.searchParams.get('q') || ''});
-            search.append(searchInput, new Element('a', {'data-close-search': '', href: '/'}));
-            document.append(searchToggle, search, new Element('form', {id: 'tab-order-form'}));
+            const search = new Element('form', {id: 'mail-search'}), query = location.searchParams.get('q') || '';
+            searchInput = new Element('input', {id: 'search-query', type: 'search', value: query});
+            search.append(searchInput);
+            // Only a submitted search shows its Clear link.
+            if (query) search.append(new Element('a', {'data-close-search': '', href: '/'}));
+            document.append(search, new Element('form', {id: 'tab-order-form'}));
             document.append(new Element('a', {'data-user-context': '', href: '/settings/context/?next=/messages/a/'}));
             document.append(new Element('a', {'data-compose': '', href: '/compose/?next=/'}));
-            rows = new Map(ids.map(id => ['mail-' + id, new Element('a', {id: 'mail-' + id, class: 'mail', href: '/messages/' + id + '/' + (remote ? '?remote=1' : '')})]));
-            if (!reading && !editing && !feed) document.append(...rows.values());
+            rows = new Map(ids.map(id => {
+                const row = new Element('tr', {id: 'mail-' + id, class: 'mail'});
+                row.append(new Element('input', {type: 'checkbox', name: 'ids', value: id}), new Element('a', {class: 'mail-link', href: '/messages/' + id + '/' + (remote ? '?remote=1' : '')}));
+                return ['mail-' + id, row];
+            }));
+            if (!reading && !editing && !feed) {
+                document.append(new Element('input', {type: 'checkbox', 'data-select-all': ''}), new Element('button', {'data-archive-selected': ''}), new Element('form', {id: 'selection'}));
+                document.append(...rows.values());
+            }
             if (feed) {
                 document.append(new Element('input', {name: 'csrfmiddlewaretoken', value: 'token'}));
                 for (const id of ids) {

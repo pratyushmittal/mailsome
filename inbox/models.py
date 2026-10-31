@@ -93,6 +93,11 @@ class Message(models.Model):
 
     # Set by views for the current navigation context; never persisted.
     url: str
+    preview: str
+
+    @property
+    def sender_name(self) -> str:
+        return parseaddr(self.sender)[0] or self.sender_email
 
     @property
     def sender_email(self) -> str:
