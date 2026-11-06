@@ -215,7 +215,7 @@ def test_detail_downloads_use_paced_batches_of_at_most_fifty(api, monkeypatch, c
     assert [item.id for item in result] == list(api.mailbox)
     assert api.batch_sizes == [min(50, count - start) for start in range(0, count, 50)]
     # Gmail's per-user quota needs a pause between batches, not before the first one.
-    assert pauses == [10] * max(0, len(api.batch_sizes) - 1)
+    assert pauses == [5] * max(0, len(api.batch_sizes) - 1)
     api.reset_mock()
     gmail.get_messages_for_list(api, list(api.mailbox))
     api.new_batch_http_request.assert_not_called()

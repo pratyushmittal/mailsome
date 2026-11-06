@@ -171,9 +171,9 @@ def update_messages(
         else set()
     )
     for start in range(0, len(message_ids), 50):
-        # Each batched get costs 20 units; 50 per 10s stays within Gmail's 6,000 units/min per user.
+        # Each batched get costs 20 units; 50 per 5s uses 12,000 of Gmail's 15,000 units/min per user, leaving room for browsing.
         if start:
-            time.sleep(10)
+            time.sleep(5)
         pending = message_ids[start : start + 50]
         failures: list[Exception] = []
         for attempt in range(3):
